@@ -1,0 +1,8 @@
+    Is it necessary to create a type for pixel? We just want to spread the
+    pointers to the pixels, and the pointer have a specified type.
+
+    Answer:
+    NEVER pass a pointer's contents to another process in MPI
+
+    MPI processes cannot read each others' memory, and virtual addressing
+    makes one process' pointer completely meaningless to another.
