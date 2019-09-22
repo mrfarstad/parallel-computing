@@ -90,6 +90,31 @@ void help(char const *exec, char const opt, char const *optarg) {
   fprintf(out, "Example: %s in.bmp out.bmp -i 10000\n", exec);
 }
 
+pixel *flattenImageData(bmpImage *image, int height, int width) {
+  pixel *tmp = malloc(height * width * sizeof(pixel));
+  for (int i = 0; i < height; i++) {
+    for (int j = 0; j < width; j++) {
+      tmp[i * width + j] = image->data[i][j];
+    }
+  }
+  return tmp;
+}
+
+bmpImage restoreFlattenedImageData(pixel *flattenedData, int height,
+                                   int width) {
+  pixel **newData = malloc(height * sizeof(pixel *));
+  for (int i = 0; i < height; i++) {
+    newData[i] = malloc(width * sizeof(pixel));
+  }
+
+  for (int i = 0; i < height; i++) {
+    for (int j = 0; j < width; j++) {
+      newData[i][j] = flattenedData[i * width + j];
+    }
+  }
+  return (bmpImage){width, height, newData};
+}
+
 int main(int argc, char **argv) {
   // Initialize the MPI environment
   MPI_Init(NULL, NULL);
@@ -114,7 +139,6 @@ int main(int argc, char **argv) {
   bmpImage *subImage = NULL;
   int image_width;
   int image_height;
-  // pixel **data = NULL;
 
   int rows_per_process;
   int rows_extra;
@@ -199,44 +223,19 @@ int main(int argc, char **argv) {
   MPI_Type_create_struct(1, blocklengths, displacements, types, &mpi_pixel);
   MPI_Type_commit(&mpi_pixel);
 
-  MPI_Aint extent;
-  MPI_Type_extent(mpi_pixel, &extent);
-
-  MPI_Type_vector(image_width, 1, extent, mpi_pixel, &mpi_pixel_vector);
-  MPI_Type_commit(&mpi_pixel_vector);
-
   MPI_Bcast(&rows_per_process, 1, MPI_INT, 0, MPI_COMM_WORLD);
-  MPI_Bcast(&rows_extra, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  // MPI_Bcast(&rows_extra, 1, MPI_INT, 0, MPI_COMM_WORLD);
   MPI_Bcast(&sendcount, 1, MPI_INT, 0, MPI_COMM_WORLD);
   MPI_Bcast(&image_width, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
-  int *sendcounts = NULL;
-  int *displs = NULL;
+  // int *sendcounts = NULL;
+  // int *displs = NULL;
 
   bmpImageChannel *imageChannel = NULL;
 
-  printf("sendcount: %d\n", sendcount);
-  printf("rows_per_process: %d\n", rows_per_process);
-  printf("rows_extra: %d\n", rows_extra);
-  printf("image_width: %d\n", image_width);
-  printf("image_height: %d\n", image_height);
-
-  /*
-    image->data list of rows
-    image->data[i] list of pixels
-
-    We want to scatter these rows among the processes
-    Base solution: convert into 1-dimensional array and convert back
-    Advanced solution: create vector types and distribute them
-  */
-
-  pixel *tmp = malloc(image_height * image_width * sizeof(pixel));
+  pixel *tmp;
   if (world_rank == 0) {
-    for (int i = 0; i < image_height; i++) {
-      for (int j = 0; j < image_width; j += 1) {
-        tmp[i * image_width + j] = image->data[i][j];
-      }
-    }
+    tmp = flattenImageData(image, image_height, image_width);
   }
 
   pixel *subTmp = malloc(rows_per_process * image_width * sizeof(pixel));
@@ -244,18 +243,9 @@ int main(int argc, char **argv) {
   MPI_Scatter(tmp, rows_per_process * image_width, mpi_pixel, subTmp,
               rows_per_process * image_width, mpi_pixel, 0, MPI_COMM_WORLD);
 
-  pixel **newData = malloc(rows_per_process * sizeof(pixel *));
-  for (int i = 0; i < rows_per_process; i++) {
-    newData[i] = malloc(image_width * sizeof(pixel));
-  }
-
-  for (int i = 0; i < rows_per_process; i++) {
-    for (int j = 0; j < image_width; j++) {
-      newData[i][j] = subTmp[i * image_width + j];
-    }
-  }
-
-  bmpImage newImage = {image_width, rows_per_process, newData};
+  bmpImage newImage = restoreFlattenedImageData(
+      subTmp, rows_per_process,
+      image_width); //{image_width, rows_per_process, newData};
 
   // Create a single color channel image. It is easier to work just with one
   // color
@@ -311,32 +301,14 @@ int main(int argc, char **argv) {
   }
   freeBmpImageChannel(imageChannel);
 
-  // MPI_Scatter(tmp, rows_per_process * image_width, mpi_pixel, subTmp,
-  //             rows_per_process * image_width, mpi_pixel, 0, MPI_COMM_WORLD);
-
-  pixel *res_tmp = malloc(rows_per_process * image_width * sizeof(pixel));
-  for (int i = 0; i < rows_per_process; i++) {
-    for (int j = 0; j < image_width; j++) {
-      res_tmp[i * image_width + j] = (&newImage)->data[i][j];
-    }
-  }
+  pixel *res_tmp = flattenImageData(&newImage, rows_per_process, image_width);
 
   MPI_Gather(res_tmp, rows_per_process * image_width, mpi_pixel, tmp,
              rows_per_process * image_width, mpi_pixel, 0, MPI_COMM_WORLD);
 
   if (world_rank == 0) {
-    newData = malloc(image_height * sizeof(pixel *));
-    for (int i = 0; i < image_height; i++) {
-      newData[i] = malloc(image_width * sizeof(pixel));
-    }
-
-    for (int i = 0; i < image_height; i++) {
-      for (int j = 0; j < image_width; j++) {
-        newData[i][j] = tmp[i * image_width + j];
-      }
-    }
-
-    bmpImage resultImage = {image_width, image_height, newData};
+    bmpImage resultImage =
+        restoreFlattenedImageData(tmp, image_height, image_width);
 
     // Write the image back to disk
     if (saveBmpImage(&resultImage, output) != 0) {
@@ -355,10 +327,14 @@ error_exit:
     free(output);
 
   MPI_Type_free(&mpi_pixel);
-  MPI_Type_free(&mpi_pixel_vector);
 
   // Finalize the MPI environment.
   MPI_Finalize();
+
+  free(image);
+  free(tmp);
+  free(newImage.data);
+  free(subTmp);
 
   return ret;
 };
