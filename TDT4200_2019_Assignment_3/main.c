@@ -190,13 +190,6 @@ int main(int argc, char **argv) {
     // data = image->data;
   }
 
-  //
-  //  /*
-  //
-  //    TODO: Incrementally apply changes from master and debug
-  //
-  //  */
-  //
   int blocklengths[1] = {3};
   MPI_Aint displacements[1] = {0};
   MPI_Datatype types[1] = {MPI_UNSIGNED_CHAR};
@@ -216,8 +209,6 @@ int main(int argc, char **argv) {
   MPI_Bcast(&rows_extra, 1, MPI_INT, 0, MPI_COMM_WORLD);
   MPI_Bcast(&sendcount, 1, MPI_INT, 0, MPI_COMM_WORLD);
   MPI_Bcast(&image_width, 1, MPI_INT, 0, MPI_COMM_WORLD);
-
-  // pixel **subImage = NULL;
 
   int *sendcounts = NULL;
   int *displs = NULL;
@@ -239,133 +230,71 @@ int main(int argc, char **argv) {
     Advanced solution: create vector types and distribute them
   */
 
-  //  unsigned char *tmp =
-  //      malloc(image_height * image_width * sizeof(unsigned char) * 3);
-
   pixel *tmp = malloc(image_height * image_width * sizeof(pixel));
-  // TODO: Assign to process 0
-  for (int i = 0; i < image_height; i++) {
-    //    for (int j = 0; j < image_width * 3; j += 3) {
-    //      tmp[i * image_width + j] = image->data[i][j].b;
-    //      tmp[i * image_width + j + 1] = image->data[i][j].g;
-    //      tmp[i * image_width + j + 2] = image->data[i][j].r;
-    //    }
-
-    for (int j = 0; j < image_width; j += 1) {
-      tmp[i * image_width + j] = image->data[i][j];
+  if (world_rank == 0) {
+    for (int i = 0; i < image_height; i++) {
+      for (int j = 0; j < image_width; j += 1) {
+        tmp[i * image_width + j] = image->data[i][j];
+      }
     }
   }
 
-  //  unsigned char *subTmp =
-  //      malloc(rows_per_process * image_width * sizeof(unsigned char) * 3);
-
   pixel *subTmp = malloc(rows_per_process * image_width * sizeof(pixel));
 
-  MPI_Scatter(tmp, (rows_per_process * image_width), mpi_pixel, subTmp,
-              (rows_per_process * image_width), mpi_pixel, 0, MPI_COMM_WORLD);
+  MPI_Scatter(tmp, rows_per_process * image_width, mpi_pixel, subTmp,
+              rows_per_process * image_width, mpi_pixel, 0, MPI_COMM_WORLD);
 
-  //  if (rows_extra == 0) {
-  //    // subImage = newBmpImage(image_width, rows_per_process);
-  //
-  //    /*
-  //      Problem: We cannot scatter a list of pointers (image->data)
-  //      Possible solution:
-  //        1. Scatterv? Scatterv requires contigious data
-  //        2. Create a vector type representing the list of pixels?
-  //    */
-  //
-  //    //        MPI_Scatter(image->data, rows_per_process, mpi_pixel_vector,
-  //    //            subImage->data,
-  //    //                        rows_per_process, mpi_pixel_vector, 0,
-  //    //                        MPI_COMM_WORLD);
-  //
-  //    // Create a single color channel image. It is easier to work just with
-  //    //    one
-  //    //    // color
-  //    //    imageChannel =
-  //    //        newBmpImageChannel(image->width, rows_per_process);
-  //  } else {
-  //    //    if (world_rank == 0)
-  //    //    {
-  //    //      sendcounts = calloc(world_size, sizeof(int));
-  //    //      displs = calloc(world_size, sizeof(int));
-  //    //
-  //    //      // Split the extra rows between the processes
-  //    //      int tmp = rows_extra;
-  //    //      for (int i = 0; i < world_size; i++)
-  //    //      {
-  //    //        int process_sendcount = sendcount;
-  //    //        if (tmp > 0)
-  //    //        {
-  //    //          process_sendcount += image->width * sizeof(pixel);
-  //    //          tmp--;
-  //    //        }
-  //    //        sendcounts[i] = process_sendcount;
-  //    //        displs[i] = process_sendcount * i;
-  //    //      }
-  //    //    }
-  //    //
-  //    //    // Use barrier because every process needs access to sendcounts
-  //    //    MPI_Barrier(MPI_COMM_WORLD);
-  //    //
-  //    //    subImage = malloc(sendcounts[world_rank]);
-  //    //
-  //    //    MPI_Scatterv(image->data, sendcounts, displs, mpi_pixel, subImage,
-  //    //                 sendcounts[world_rank], mpi_pixel, 0,
-  //    MPI_COMM_WORLD);
-  //    //    // Create a single color channel image. It is easier to work just
-  //    with
-  //    //    one
-  //    //    // color
-  //    //    imageChannel =
-  //    //        newBmpImageChannel(image->width, (sendcounts[world_rank] /
-  //    //                                          (image->width *
-  //    //                                          sizeof(pixel))));
-  //  }
-  //
-  MPI_Type_free(&mpi_pixel);
-  MPI_Type_free(&mpi_pixel_vector);
+  pixel **newData = malloc(rows_per_process * sizeof(pixel *));
+  for (int i = 0; i < rows_per_process; i++) {
+    newData[i] = malloc(image_width * sizeof(pixel));
+  }
 
-  /*
+  for (int i = 0; i < rows_per_process; i++) {
+    for (int j = 0; j < image_width; j++) {
+      newData[i][j] = subTmp[i * image_width + j];
+    }
+  }
+
+  bmpImage newImage = {image_width, rows_per_process, newData};
+
   // Create a single color channel image. It is easier to work just with one
-  color bmpImageChannel *imageChannel = newBmpImageChannel(image->width,
-  image->height); if (imageChannel == NULL)
-  {
+  // color
+  imageChannel = newBmpImageChannel(image_width, rows_per_process);
+  if (imageChannel == NULL) {
     fprintf(stderr, "Could not allocate new image channel!\n");
     freeBmpImage(image);
     goto error_exit;
   }
 
   // Extract from the loaded image an average over all colors - nothing else
-  than
+  // than
   // a black and white representation
   // extractImageChannel and mapImageChannel need the images to be in the exact
   // same dimensions!
   // Other prepared extraction functions are extractRed, extractGreen,
-  extractBlue if (extractImageChannel(imageChannel, image, extractAverage) != 0)
-  {
+  // extractBlue
+  if (extractImageChannel(imageChannel, &newImage, extractAverage) != 0) {
     fprintf(stderr, "Could not extract image channel!\n");
     freeBmpImage(image);
     freeBmpImageChannel(imageChannel);
     goto error_exit;
   }
 
-  //Here we do the actual computation!
-  // imageChannel->data is a 2-dimensional array of unsigned char which is
-  accessed row first ([y][x]) bmpImageChannel *processImageChannel =
-  newBmpImageChannel(imageChannel->width, imageChannel->height); for (unsigned
-  int i = 0; i < iterations; i++)
-  {
-    applyKernel(processImageChannel->data,
-                imageChannel->data,
-                imageChannel->width,
-                imageChannel->height,
+  // Here we do the actual computation!
+  //   imageChannel->data is a 2-dimensional array of unsigned char which is
+  //    accessed row first ([y][x])
+  bmpImageChannel *processImageChannel =
+      newBmpImageChannel(imageChannel->width, imageChannel->height);
+  for (unsigned int i = 0; i < iterations; i++) {
+    applyKernel(processImageChannel->data, imageChannel->data,
+                imageChannel->width, imageChannel->height,
                 (int *)laplacian1Kernel, 3, laplacian1KernelFactor
                 //               (int *)laplacian2Kernel, 3,
-  laplacian2KernelFactor
+                // laplacian2KernelFactor
                 //               (int *)laplacian3Kernel, 3,
-  laplacian3KernelFactor
-                //               (int *)gaussianKernel, 5, gaussianKernelFactor
+                // laplacian3KernelFactor
+                //               (int *)gaussianKernel, 5,
+                // gaussianKernelFactor
     );
     swapImageChannel(&processImageChannel, &imageChannel);
   }
@@ -374,25 +303,49 @@ int main(int argc, char **argv) {
   // Map our single color image back to a normal BMP image with 3 color channels
   // mapEqual puts the color value on all three channels the same way
   // other mapping functions are mapRed, mapGreen, mapBlue
-  if (mapImageChannel(image, imageChannel, mapEqual) != 0)
-  {
+  if (mapImageChannel(&newImage, imageChannel, mapEqual) != 0) {
     fprintf(stderr, "Could not map image channel!\n");
-    freeBmpImage(image);
+    freeBmpImage(&newImage);
     freeBmpImageChannel(imageChannel);
     goto error_exit;
   }
   freeBmpImageChannel(imageChannel);
 
-  //Write the image back to disk
-  if (saveBmpImage(image, output) != 0)
-  {
-    fprintf(stderr, "Could not save output to '%s'!\n", output);
-    freeBmpImage(image);
-    goto error_exit;
-  };
+  // MPI_Scatter(tmp, rows_per_process * image_width, mpi_pixel, subTmp,
+  //             rows_per_process * image_width, mpi_pixel, 0, MPI_COMM_WORLD);
 
+  pixel *res_tmp = malloc(rows_per_process * image_width * sizeof(pixel));
+  for (int i = 0; i < rows_per_process; i++) {
+    for (int j = 0; j < image_width; j++) {
+      res_tmp[i * image_width + j] = (&newImage)->data[i][j];
+    }
+  }
 
-  */
+  MPI_Gather(res_tmp, rows_per_process * image_width, mpi_pixel, tmp,
+             rows_per_process * image_width, mpi_pixel, 0, MPI_COMM_WORLD);
+
+  if (world_rank == 0) {
+    newData = malloc(image_height * sizeof(pixel *));
+    for (int i = 0; i < image_height; i++) {
+      newData[i] = malloc(image_width * sizeof(pixel));
+    }
+
+    for (int i = 0; i < image_height; i++) {
+      for (int j = 0; j < image_width; j++) {
+        newData[i][j] = tmp[i * image_width + j];
+      }
+    }
+
+    bmpImage resultImage = {image_width, image_height, newData};
+
+    // Write the image back to disk
+    if (saveBmpImage(&resultImage, output) != 0) {
+      fprintf(stderr, "Could not save output to '%s'!\n", output);
+      freeBmpImage(image);
+      goto error_exit;
+    };
+  }
+
 graceful_exit:
   ret = 0;
 error_exit:
@@ -400,6 +353,9 @@ error_exit:
     free(input);
   if (output)
     free(output);
+
+  MPI_Type_free(&mpi_pixel);
+  MPI_Type_free(&mpi_pixel_vector);
 
   // Finalize the MPI environment.
   MPI_Finalize();
