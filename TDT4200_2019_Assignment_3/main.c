@@ -1,75 +1,58 @@
+#include "libs/bitmap.h"
+#include <getopt.h>
+#include <mpi.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <string.h>
-#include <getopt.h>
 #include <stdlib.h>
-#include "libs/bitmap.h"
-#include <mpi.h>
+#include <string.h>
 
 // Convolutional Kernel Examples, each with dimension 3,
 // gaussian kernel with dimension 5
 // If you apply another kernel, remember not only to exchange
 // the kernel but also the kernelFactor and the correct dimension.
 
-int const sobelYKernel[] = {-1, -2, -1,
-                            0, 0, 0,
-                            1, 2, 1};
+int const sobelYKernel[] = {-1, -2, -1, 0, 0, 0, 1, 2, 1};
 float const sobelYKernelFactor = (float)1.0;
 
-int const sobelXKernel[] = {-1, -0, -1,
-                            -2, 0, -2,
-                            -1, 0, -1, 0};
+int const sobelXKernel[] = {-1, -0, -1, -2, 0, -2, -1, 0, -1, 0};
 float const sobelXKernelFactor = (float)1.0;
 
-int const laplacian1Kernel[] = {-1, -4, -1,
-                                -4, 20, -4,
-                                -1, -4, -1};
+int const laplacian1Kernel[] = {-1, -4, -1, -4, 20, -4, -1, -4, -1};
 
 float const laplacian1KernelFactor = (float)1.0;
 
-int const laplacian2Kernel[] = {0, 1, 0,
-                                1, -4, 1,
-                                0, 1, 0};
+int const laplacian2Kernel[] = {0, 1, 0, 1, -4, 1, 0, 1, 0};
 float const laplacian2KernelFactor = (float)1.0;
 
-int const laplacian3Kernel[] = {-1, -1, -1,
-                                -1, 8, -1,
-                                -1, -1, -1};
+int const laplacian3Kernel[] = {-1, -1, -1, -1, 8, -1, -1, -1, -1};
 float const laplacian3KernelFactor = (float)1.0;
 
-//Bonus Kernel:
+// Bonus Kernel:
 
-int const gaussianKernel[] = {1, 4, 6, 4, 1,
-                              4, 16, 24, 16, 4,
-                              6, 24, 36, 24, 6,
-                              4, 16, 24, 16, 4,
-                              1, 4, 6, 4, 1};
+int const gaussianKernel[] = {1,  4, 6, 4,  1,  4,  16, 24, 16, 4, 6, 24, 36,
+                              24, 6, 4, 16, 24, 16, 4,  1,  4,  6, 4, 1};
 
 float const gaussianKernelFactor = (float)1.0 / 256.0;
 
 // Helper function to swap bmpImageChannel pointers
 
-void swapImageChannel(bmpImageChannel **one, bmpImageChannel **two)
-{
+void swapImageChannel(bmpImageChannel **one, bmpImageChannel **two) {
   bmpImageChannel *helper = *two;
   *two = *one;
   *one = helper;
 }
 
 // Apply convolutional kernel on image data
-void applyKernel(unsigned char **out, unsigned char **in, unsigned int width, unsigned int height, int *kernel, unsigned int kernelDim, float kernelFactor)
-{
+void applyKernel(unsigned char **out, unsigned char **in, unsigned int width,
+                 unsigned int height, int *kernel, unsigned int kernelDim,
+                 float kernelFactor) {
   unsigned int const kernelCenter = (kernelDim / 2);
-  for (unsigned int y = 0; y < height; y++)
-  {
-    for (unsigned int x = 0; x < width; x++)
-    {
+  for (unsigned int y = 0; y < height; y++) {
+    for (unsigned int x = 0; x < width; x++) {
       int aggregate = 0;
-      for (unsigned int ky = 0; ky < kernelDim; ky++)
-      {
+      for (unsigned int ky = 0; ky < kernelDim; ky++) {
         int nky = kernelDim - 1 - ky;
-        for (unsigned int kx = 0; kx < kernelDim; kx++)
-        {
+        for (unsigned int kx = 0; kx < kernelDim; kx++) {
           int nkx = kernelDim - 1 - kx;
 
           int yy = y + (ky - kernelCenter);
@@ -79,30 +62,22 @@ void applyKernel(unsigned char **out, unsigned char **in, unsigned int width, un
         }
       }
       aggregate *= kernelFactor;
-      if (aggregate > 0)
-      {
+      if (aggregate > 0) {
         out[y][x] = (aggregate > 255) ? 255 : aggregate;
-      }
-      else
-      {
+      } else {
         out[y][x] = 0;
       }
     }
   }
 }
 
-void help(char const *exec, char const opt, char const *optarg)
-{
+void help(char const *exec, char const opt, char const *optarg) {
   FILE *out = stdout;
-  if (opt != 0)
-  {
+  if (opt != 0) {
     out = stderr;
-    if (optarg)
-    {
+    if (optarg) {
       fprintf(out, "Invalid parameter - %c %s\n", opt, optarg);
-    }
-    else
-    {
+    } else {
       fprintf(out, "Invalid parameter - %c\n", opt);
     }
   }
@@ -115,8 +90,7 @@ void help(char const *exec, char const opt, char const *optarg)
   fprintf(out, "Example: %s in.bmp out.bmp -i 10000\n", exec);
 }
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
   // Initialize the MPI environment
   MPI_Init(NULL, NULL);
 
@@ -137,9 +111,16 @@ int main(int argc, char **argv)
   int ret = 0;
 
   bmpImage *image = NULL;
+  bmpImage *subImage = NULL;
+  int image_width;
+  int image_height;
+  // pixel **data = NULL;
 
-  if (world_rank == 0)
-  {
+  int rows_per_process;
+  int rows_extra;
+  int sendcount;
+
+  if (world_rank == 0) {
 
     static struct option const long_options[] = {
         {"help", no_argument, 0, 'h'},
@@ -151,17 +132,15 @@ int main(int argc, char **argv)
       char *endptr;
       int c;
       int option_index = 0;
-      while ((c = getopt_long(argc, argv, short_options, long_options, &option_index)) != -1)
-      {
-        switch (c)
-        {
+      while ((c = getopt_long(argc, argv, short_options, long_options,
+                              &option_index)) != -1) {
+        switch (c) {
         case 'h':
           help(argv[0], 0, NULL);
           goto graceful_exit;
         case 'i':
           iterations = strtol(optarg, &endptr, 10);
-          if (endptr == optarg)
-          {
+          if (endptr == optarg) {
             help(argv[0], c, optarg);
             goto error_exit;
           }
@@ -172,8 +151,7 @@ int main(int argc, char **argv)
       }
     }
 
-    if (argc <= (optind + 1))
-    {
+    if (argc <= (optind + 1)) {
       help(argv[0], ' ', "Not enough arugments");
       goto error_exit;
     }
@@ -193,55 +171,178 @@ int main(int argc, char **argv)
     Create the BMP image and load it from disk.
    */
     image = newBmpImage(0, 0);
-    if (image == NULL)
-    {
+    if (image == NULL) {
       fprintf(stderr, "Could not allocate new image!\n");
     }
 
-    if (loadBmpImage(image, input) != 0)
-    {
+    if (loadBmpImage(image, input) != 0) {
       fprintf(stderr, "Could not load bmp image '%s'!\n", input);
       freeBmpImage(image);
       goto error_exit;
     }
+
+    rows_per_process = image->height / world_size;
+    rows_extra = image->height % world_size;
+    image_width = image->width;
+    image_height = image->height;
+    sendcount = rows_per_process * image->width * sizeof(pixel);
+
+    // data = image->data;
   }
 
-  MPI_Barrier(MPI_COMM_WORLD);
-
-  /*
-  
-    TODO: Incrementally apply changes from master and debug
-    Current bug: MPI type creation fails
-
-  */
-
-  //  int rows_per_process = image->height / world_rank;
-  //  int rows_extra = image->height % world_rank;
+  //
+  //  /*
+  //
+  //    TODO: Incrementally apply changes from master and debug
+  //
+  //  */
   //
   int blocklengths[1] = {3};
   MPI_Aint displacements[1] = {0};
   MPI_Datatype types[1] = {MPI_UNSIGNED_CHAR};
   MPI_Datatype mpi_pixel;
-  //
+  MPI_Datatype mpi_pixel_vector;
+
   MPI_Type_create_struct(1, blocklengths, displacements, types, &mpi_pixel);
   MPI_Type_commit(&mpi_pixel);
-  MPI_Type_free(&mpi_pixel);
 
-  // Create a single color channel image. It is easier to work just with one color
-  bmpImageChannel *imageChannel = newBmpImageChannel(image->width, image->height);
-  if (imageChannel == NULL)
+  MPI_Aint extent;
+  MPI_Type_extent(mpi_pixel, &extent);
+
+  MPI_Type_vector(image_width, 1, extent, mpi_pixel, &mpi_pixel_vector);
+  MPI_Type_commit(&mpi_pixel_vector);
+
+  MPI_Bcast(&rows_per_process, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  MPI_Bcast(&rows_extra, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  MPI_Bcast(&sendcount, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  MPI_Bcast(&image_width, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+  // pixel **subImage = NULL;
+
+  int *sendcounts = NULL;
+  int *displs = NULL;
+
+  bmpImageChannel *imageChannel = NULL;
+
+  printf("sendcount: %d\n", sendcount);
+  printf("rows_per_process: %d\n", rows_per_process);
+  printf("rows_extra: %d\n", rows_extra);
+  printf("image_width: %d\n", image_width);
+  printf("image_height: %d\n", image_height);
+
+  /*
+    image->data list of rows
+    image->data[i] list of pixels
+
+    We want to scatter these rows among the processes
+    Base solution: convert into 1-dimensional array and convert back
+    Advanced solution: create vector types and distribute them
+  */
+
+  //  unsigned char *tmp =
+  //      malloc(image_height * image_width * sizeof(unsigned char) * 3);
+
+  pixel *tmp = malloc(image_height * image_width * sizeof(pixel));
+  // TODO: Assign to process 0
+  for (int i = 0; i < image_height; i++) {
+    //    for (int j = 0; j < image_width * 3; j += 3) {
+    //      tmp[i * image_width + j] = image->data[i][j].b;
+    //      tmp[i * image_width + j + 1] = image->data[i][j].g;
+    //      tmp[i * image_width + j + 2] = image->data[i][j].r;
+    //    }
+
+    for (int j = 0; j < image_width; j += 1) {
+      tmp[i * image_width + j] = image->data[i][j];
+    }
+  }
+
+  //  unsigned char *subTmp =
+  //      malloc(rows_per_process * image_width * sizeof(unsigned char) * 3);
+
+  pixel *subTmp = malloc(rows_per_process * image_width * sizeof(pixel));
+
+  MPI_Scatter(tmp, (rows_per_process * image_width), mpi_pixel, subTmp,
+              (rows_per_process * image_width), mpi_pixel, 0, MPI_COMM_WORLD);
+
+  //  if (rows_extra == 0) {
+  //    // subImage = newBmpImage(image_width, rows_per_process);
+  //
+  //    /*
+  //      Problem: We cannot scatter a list of pointers (image->data)
+  //      Possible solution:
+  //        1. Scatterv? Scatterv requires contigious data
+  //        2. Create a vector type representing the list of pixels?
+  //    */
+  //
+  //    //        MPI_Scatter(image->data, rows_per_process, mpi_pixel_vector,
+  //    //            subImage->data,
+  //    //                        rows_per_process, mpi_pixel_vector, 0,
+  //    //                        MPI_COMM_WORLD);
+  //
+  //    // Create a single color channel image. It is easier to work just with
+  //    //    one
+  //    //    // color
+  //    //    imageChannel =
+  //    //        newBmpImageChannel(image->width, rows_per_process);
+  //  } else {
+  //    //    if (world_rank == 0)
+  //    //    {
+  //    //      sendcounts = calloc(world_size, sizeof(int));
+  //    //      displs = calloc(world_size, sizeof(int));
+  //    //
+  //    //      // Split the extra rows between the processes
+  //    //      int tmp = rows_extra;
+  //    //      for (int i = 0; i < world_size; i++)
+  //    //      {
+  //    //        int process_sendcount = sendcount;
+  //    //        if (tmp > 0)
+  //    //        {
+  //    //          process_sendcount += image->width * sizeof(pixel);
+  //    //          tmp--;
+  //    //        }
+  //    //        sendcounts[i] = process_sendcount;
+  //    //        displs[i] = process_sendcount * i;
+  //    //      }
+  //    //    }
+  //    //
+  //    //    // Use barrier because every process needs access to sendcounts
+  //    //    MPI_Barrier(MPI_COMM_WORLD);
+  //    //
+  //    //    subImage = malloc(sendcounts[world_rank]);
+  //    //
+  //    //    MPI_Scatterv(image->data, sendcounts, displs, mpi_pixel, subImage,
+  //    //                 sendcounts[world_rank], mpi_pixel, 0,
+  //    MPI_COMM_WORLD);
+  //    //    // Create a single color channel image. It is easier to work just
+  //    with
+  //    //    one
+  //    //    // color
+  //    //    imageChannel =
+  //    //        newBmpImageChannel(image->width, (sendcounts[world_rank] /
+  //    //                                          (image->width *
+  //    //                                          sizeof(pixel))));
+  //  }
+  //
+  MPI_Type_free(&mpi_pixel);
+  MPI_Type_free(&mpi_pixel_vector);
+
+  /*
+  // Create a single color channel image. It is easier to work just with one
+  color bmpImageChannel *imageChannel = newBmpImageChannel(image->width,
+  image->height); if (imageChannel == NULL)
   {
     fprintf(stderr, "Could not allocate new image channel!\n");
     freeBmpImage(image);
     goto error_exit;
   }
 
-  // Extract from the loaded image an average over all colors - nothing else than
+  // Extract from the loaded image an average over all colors - nothing else
+  than
   // a black and white representation
   // extractImageChannel and mapImageChannel need the images to be in the exact
   // same dimensions!
-  // Other prepared extraction functions are extractRed, extractGreen, extractBlue
-  if (extractImageChannel(imageChannel, image, extractAverage) != 0)
+  // Other prepared extraction functions are extractRed, extractGreen,
+  extractBlue if (extractImageChannel(imageChannel, image, extractAverage) != 0)
   {
     fprintf(stderr, "Could not extract image channel!\n");
     freeBmpImage(image);
@@ -250,17 +351,20 @@ int main(int argc, char **argv)
   }
 
   //Here we do the actual computation!
-  // imageChannel->data is a 2-dimensional array of unsigned char which is accessed row first ([y][x])
-  bmpImageChannel *processImageChannel = newBmpImageChannel(imageChannel->width, imageChannel->height);
-  for (unsigned int i = 0; i < iterations; i++)
+  // imageChannel->data is a 2-dimensional array of unsigned char which is
+  accessed row first ([y][x]) bmpImageChannel *processImageChannel =
+  newBmpImageChannel(imageChannel->width, imageChannel->height); for (unsigned
+  int i = 0; i < iterations; i++)
   {
     applyKernel(processImageChannel->data,
                 imageChannel->data,
                 imageChannel->width,
                 imageChannel->height,
                 (int *)laplacian1Kernel, 3, laplacian1KernelFactor
-                //               (int *)laplacian2Kernel, 3, laplacian2KernelFactor
-                //               (int *)laplacian3Kernel, 3, laplacian3KernelFactor
+                //               (int *)laplacian2Kernel, 3,
+  laplacian2KernelFactor
+                //               (int *)laplacian3Kernel, 3,
+  laplacian3KernelFactor
                 //               (int *)gaussianKernel, 5, gaussianKernelFactor
     );
     swapImageChannel(&processImageChannel, &imageChannel);
@@ -287,6 +391,8 @@ int main(int argc, char **argv)
     goto error_exit;
   };
 
+
+  */
 graceful_exit:
   ret = 0;
 error_exit:
