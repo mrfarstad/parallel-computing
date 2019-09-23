@@ -142,7 +142,8 @@ int main(int argc, char **argv) {
 
   int rows_per_process;
   int rows_extra;
-  int sendcount;
+  int *sendcounts = malloc(world_size * sizeof(int));
+  int *displacements = malloc(world_size * sizeof(int));
 
   if (world_rank == 0) {
 
@@ -209,27 +210,30 @@ int main(int argc, char **argv) {
     rows_extra = image->height % world_size;
     image_width = image->width;
     image_height = image->height;
-    sendcount = rows_per_process * image->width * sizeof(pixel);
-
-    // data = image->data;
+    for (int i = 0; i < world_size; i++) {
+      sendcounts[i] = rows_per_process * image->width;
+      displacements[i] = i * rows_per_process * image->width;
+    }
   }
 
   int blocklengths[1] = {3};
-  MPI_Aint displacements[1] = {0};
+  MPI_Aint displs[1] = {0};
   MPI_Datatype types[1] = {MPI_UNSIGNED_CHAR};
   MPI_Datatype mpi_pixel;
-  MPI_Datatype mpi_pixel_vector;
+  MPI_Datatype mpi_process_rows;
 
-  MPI_Type_create_struct(1, blocklengths, displacements, types, &mpi_pixel);
+  MPI_Type_create_struct(1, blocklengths, displs, types, &mpi_pixel);
   MPI_Type_commit(&mpi_pixel);
 
-  MPI_Bcast(&rows_per_process, 1, MPI_INT, 0, MPI_COMM_WORLD);
-  // MPI_Bcast(&rows_extra, 1, MPI_INT, 0, MPI_COMM_WORLD);
-  MPI_Bcast(&sendcount, 1, MPI_INT, 0, MPI_COMM_WORLD);
-  MPI_Bcast(&image_width, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  MPI_Type_contiguous(world_size, MPI_INT, &mpi_process_rows);
+  MPI_Type_commit(&mpi_process_rows);
 
-  // int *sendcounts = NULL;
-  // int *displs = NULL;
+  // TODO: Make struct with process_rows, image_width and image_height to
+  // optimize
+  MPI_Bcast(sendcounts, 1, mpi_process_rows, 0, MPI_COMM_WORLD);
+  MPI_Bcast(displacements, 1, mpi_process_rows, 0, MPI_COMM_WORLD);
+  MPI_Bcast(&image_width, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  MPI_Bcast(&image_height, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
   bmpImageChannel *imageChannel = NULL;
 
@@ -238,18 +242,24 @@ int main(int argc, char **argv) {
     tmp = flattenImageData(image, image_height, image_width);
   }
 
-  pixel *subTmp = malloc(rows_per_process * image_width * sizeof(pixel));
+  MPI_Barrier(MPI_COMM_WORLD);
+  int sendcount = sendcounts[world_rank];
+  int process_rows = sendcount / image_width;
+  int sub_buffer_size = sendcount * sizeof(int);
 
-  MPI_Scatter(tmp, rows_per_process * image_width, mpi_pixel, subTmp,
-              rows_per_process * image_width, mpi_pixel, 0, MPI_COMM_WORLD);
+  pixel *subTmp = malloc(sub_buffer_size);
+
+  MPI_Scatterv(tmp, sendcounts, displacements, mpi_pixel, subTmp, sendcount,
+               mpi_pixel, 0, MPI_COMM_WORLD);
 
   bmpImage newImage = restoreFlattenedImageData(
-      subTmp, rows_per_process,
+      subTmp, process_rows,
       image_width); //{image_width, rows_per_process, newData};
 
   // Create a single color channel image. It is easier to work just with one
   // color
-  imageChannel = newBmpImageChannel(image_width, rows_per_process);
+
+  imageChannel = newBmpImageChannel(image_width, process_rows);
   if (imageChannel == NULL) {
     fprintf(stderr, "Could not allocate new image channel!\n");
     freeBmpImage(image);
@@ -301,10 +311,10 @@ int main(int argc, char **argv) {
   }
   freeBmpImageChannel(imageChannel);
 
-  pixel *res_tmp = flattenImageData(&newImage, rows_per_process, image_width);
+  pixel *res_tmp = flattenImageData(&newImage, process_rows, image_width);
 
-  MPI_Gather(res_tmp, rows_per_process * image_width, mpi_pixel, tmp,
-             rows_per_process * image_width, mpi_pixel, 0, MPI_COMM_WORLD);
+  MPI_Gatherv(res_tmp, sendcount, mpi_pixel, tmp, sendcounts, displacements,
+              mpi_pixel, 0, MPI_COMM_WORLD);
 
   if (world_rank == 0) {
     bmpImage resultImage =
@@ -317,6 +327,9 @@ int main(int argc, char **argv) {
       goto error_exit;
     };
   }
+
+  free(sendcounts);
+  free(displacements);
 
 graceful_exit:
   ret = 0;
