@@ -208,11 +208,26 @@ int main(int argc, char **argv) {
 
     rows_per_process = image->height / world_size;
     rows_extra = image->height % world_size;
+
     image_width = image->width;
     image_height = image->height;
-    for (int i = 0; i < world_size; i++) {
-      sendcounts[i] = rows_per_process * image->width;
-      displacements[i] = i * rows_per_process * image->width;
+
+    if (rows_extra == 0) {
+      for (int i = 0; i < world_size; i++) {
+        sendcounts[i] = rows_per_process * image->width;
+        displacements[i] = i * rows_per_process * image->width;
+      }
+    } else {
+      int tmp_extra = rows_extra;
+      for (int i = 0; i < world_size; i++) {
+        int tmp_rows = rows_per_process;
+        if (tmp_extra > 0) {
+          rows_per_process++;
+          tmp_extra--;
+        }
+        sendcounts[i] = tmp_rows * image->width;
+        displacements[i] = i * tmp_rows * image->width;
+      }
     }
   }
 
@@ -258,7 +273,6 @@ int main(int argc, char **argv) {
 
   // Create a single color channel image. It is easier to work just with one
   // color
-
   imageChannel = newBmpImageChannel(image_width, process_rows);
   if (imageChannel == NULL) {
     fprintf(stderr, "Could not allocate new image channel!\n");
@@ -285,7 +299,66 @@ int main(int argc, char **argv) {
   //    accessed row first ([y][x])
   bmpImageChannel *processImageChannel =
       newBmpImageChannel(imageChannel->width, imageChannel->height);
+
+  // Leave two rows at bottom and top open
+  int sub_halo_buffer_size = (process_rows + 2) * image_width;
+  pixel *halo_tmp = calloc(sub_halo_buffer_size, sizeof(int));
+  for (int i = 0; i < process_rows * image_width; i++) {
+    halo_tmp[i + image_width] = subTmp[i];
+  }
+
+  pixel *testSend = &halo_tmp[image_width];
+  // pixel *testRecv = calloc(image_width, sizeof(pixel));
+  //  for (int i = 0; i < 3; i++) {
+  //    testSend[i] = world_rank + i;
+  //  }
+
   for (unsigned int i = 0; i < iterations; i++) {
+    /*
+    TODO: Exchange north and south border
+    */
+    // Only exhange north if not top rop
+    // Potential failure: Assumes rank world_size-1 to have tow row
+    //    if (world_rank < world_size - 1) {
+    //      MPI_Sendrecv(&halo_tmp[(process_rows - 1) * image_width],
+    //      image_width,
+    //                   mpi_pixel, world_rank + 1, 0, halo_tmp, image_width,
+    //                   mpi_pixel, world_rank, 0, MPI_COMM_WORLD,
+    //                   MPI_STATUSES_IGNORE);
+    //    }
+
+    // Only exhange south if not bottom row
+    // Potential failure: Assumes rank 0 to have bottom row
+
+    // Process 1
+    if (world_rank != 0) {
+
+      MPI_Sendrecv(&halo_tmp[image_width], image_width, mpi_pixel, 0, 0,
+                   halo_tmp, image_width, mpi_pixel, 0, 0, MPI_COMM_WORLD,
+                   MPI_STATUSES_IGNORE);
+    }
+
+    // Process 0
+    if (world_rank < world_size - 1) {
+      MPI_Sendrecv(&halo_tmp[process_rows * image_width], image_width,
+                   mpi_pixel, 1, 0, &halo_tmp[(process_rows + 1) * image_width],
+                   image_width, mpi_pixel, 1, 0, MPI_COMM_WORLD,
+                   MPI_STATUSES_IGNORE);
+    }
+
+    //    if (world_rank == 0) {
+    //      for (int i = 0; i < 3; i++) {
+    //        printf("should be %d: \n", halo_tmp[process_rows *
+    //        image_width].g);
+    //      }
+    //    }
+    //
+    //    if (world_rank == 1) {
+    //      for (int i = 0; i < 3; i++) {
+    //        printf("but was %d: \n", testRecv[i].g);
+    //      }
+    //    }
+
     applyKernel(processImageChannel->data, imageChannel->data,
                 imageChannel->width, imageChannel->height,
                 (int *)laplacian1Kernel, 3, laplacian1KernelFactor
@@ -328,9 +401,6 @@ int main(int argc, char **argv) {
     };
   }
 
-  free(sendcounts);
-  free(displacements);
-
 graceful_exit:
   ret = 0;
 error_exit:
@@ -340,10 +410,15 @@ error_exit:
     free(output);
 
   MPI_Type_free(&mpi_pixel);
+  MPI_Type_free(&mpi_process_rows);
 
   // Finalize the MPI environment.
   MPI_Finalize();
-
+  // free(testSend);
+  free(halo_tmp);
+  // free(testRecv);
+  free(sendcounts);
+  free(displacements);
   free(image);
   free(tmp);
   free(newImage.data);
