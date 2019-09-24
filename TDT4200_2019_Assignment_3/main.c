@@ -115,6 +115,20 @@ bmpImage restoreFlattenedImageData(pixel *flattenedData, int height,
   return (bmpImage){width, height, newData};
 }
 
+bmpImage removeHalo(bmpImage newImage, int process_rows, int image_width) {
+  pixel **data = calloc(process_rows, sizeof(pixel *));
+  for (int i = 0; i < process_rows; i++) {
+    data[i] = calloc(image_width, sizeof(pixel));
+    for (int j = 0; j < image_width; j++) {
+      data[i][j] = newImage.data[i + 1][j];
+    }
+  }
+  free(newImage.data[0]);
+  free(newImage.data[process_rows + 1]);
+  free(newImage.data);
+  return (bmpImage){image_width, process_rows, data};
+}
+
 int main(int argc, char **argv) {
   // Initialize the MPI environment
   MPI_Init(NULL, NULL);
@@ -269,6 +283,9 @@ int main(int argc, char **argv) {
   }
   data[process_rows + 1] = top_row;
 
+  free(newImage.data);
+  newImage.data = data;
+
   // Create a single color channel image. It is easier to work just with one
   // color
   imageChannel = newBmpImageChannel(image_width, process_rows);
@@ -350,7 +367,9 @@ int main(int argc, char **argv) {
   }
   freeBmpImageChannel(imageChannel);
 
-  pixel *res_tmp = flattenImageData(&newImage, process_rows, image_width);
+  bmpImage resImage = removeHalo(newImage, process_rows, image_width);
+  // pixel *res_tmp = flattenImageData(&newImage, process_rows, image_width);
+  pixel *res_tmp = flattenImageData(&resImage, process_rows, image_width);
 
   MPI_Gatherv(res_tmp, sendcount, mpi_pixel, tmp, sendcounts, displacements,
               mpi_pixel, 0, MPI_COMM_WORLD);
@@ -379,18 +398,11 @@ error_exit:
 
   // Finalize the MPI environment.
   MPI_Finalize();
-  // free(testSend);
-  // free(halo_tmp);
-  // free(testRecv);
-  //  free(data);
-  //  free(bottom_row);
-  //  free(top_row);
-
+  free(resImage.data);
   free(sendcounts);
   free(displacements);
   free(image);
   free(tmp);
-  free(newImage.data);
   free(subTmp);
 
   return ret;
