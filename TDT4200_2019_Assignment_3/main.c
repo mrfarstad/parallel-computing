@@ -212,12 +212,12 @@ int main(int argc, char **argv) {
     image_height = image->height;
 
     for (int i = 0; i < world_size; i++) {
-      int temp_rows = rows_per_process;
+      int tmp_rows = rows_per_process;
       if (i < rows_extra) {
-        temp_rows++;
+        tmp_rows += 1;
       }
-      sendcounts[i] = temp_rows * image->width;
-      displacements[i] = i * temp_rows * image->width;
+      sendcounts[i] = tmp_rows * image->width;
+      displacements[i] = i * tmp_rows * image->width;
     }
   }
 
@@ -233,8 +233,8 @@ int main(int argc, char **argv) {
   MPI_Type_contiguous(world_size, MPI_INT, &mpi_process_rows);
   MPI_Type_commit(&mpi_process_rows);
 
-  // TODO: Make struct with sendcounts, displacements, image_width and image_height to
-  // optimize
+  // TODO: Make struct with sendcounts, displacements, image_width and
+  // image_height to optimize
   MPI_Bcast(sendcounts, 1, mpi_process_rows, 0, MPI_COMM_WORLD);
   MPI_Bcast(displacements, 1, mpi_process_rows, 0, MPI_COMM_WORLD);
   MPI_Bcast(&image_width, 1, MPI_INT, 0, MPI_COMM_WORLD);
@@ -257,9 +257,8 @@ int main(int argc, char **argv) {
   MPI_Scatterv(tmp, sendcounts, displacements, mpi_pixel, subTmp, sendcount,
                mpi_pixel, 0, MPI_COMM_WORLD);
 
-  bmpImage newImage = restoreFlattenedImageData(
-      subTmp, process_rows,
-      image_width); //{image_width, rows_per_process, newData};
+  bmpImage newImage =
+      restoreFlattenedImageData(subTmp, process_rows, image_width);
 
   // Create a single color channel image. It is easier to work just with one
   // color
@@ -291,63 +290,50 @@ int main(int argc, char **argv) {
       newBmpImageChannel(imageChannel->width, imageChannel->height);
 
   // Leave two rows at bottom and top open
-  int sub_halo_buffer_size = (process_rows + 2) * image_width;
-  pixel *halo_tmp = calloc(sub_halo_buffer_size, sizeof(int));
-  for (int i = 0; i < process_rows * image_width; i++) {
-    halo_tmp[i + image_width] = subTmp[i];
-  }
-
-  pixel *testSend = &halo_tmp[image_width];
-  // pixel *testRecv = calloc(image_width, sizeof(pixel));
-  //  for (int i = 0; i < 3; i++) {
-  //    testSend[i] = world_rank + i;
+  //  int sub_halo_buffer_size = (process_rows + 2) * image_width;
+  //  pixel *halo_tmp = calloc(sub_halo_buffer_size, sizeof(int));
+  //  for (int i = 0; i < process_rows * image_width; i++) {
+  //    halo_tmp[i + image_width] = subTmp[i];
   //  }
 
-  for (unsigned int i = 0; i < iterations; i++) {
-    /*
-    TODO: Exchange north and south border
-    */
-    // Only exhange north if not top rop
-    // Potential failure: Assumes rank world_size-1 to have tow row
-    //    if (world_rank < world_size - 1) {
-    //      MPI_Sendrecv(&halo_tmp[(process_rows - 1) * image_width],
-    //      image_width,
-    //                   mpi_pixel, world_rank + 1, 0, halo_tmp, image_width,
-    //                   mpi_pixel, world_rank, 0, MPI_COMM_WORLD,
-    //                   MPI_STATUSES_IGNORE);
-    //    }
+  // pixel *testSend = &halo_tmp[image_width];
 
-    // Only exhange south if not bottom row
-    // Potential failure: Assumes rank 0 to have bottom row
+  unsigned char **data = calloc(process_rows + 2, sizeof(unsigned char *));
+  unsigned char *bottom_row = calloc(image_width, sizeof(unsigned char));
+  unsigned char *top_row = calloc(image_width, sizeof(unsigned char));
+  //
+  data[0] = bottom_row;
+  for (int i = 1; i < process_rows + 1; i++) {
+    data[i] = imageChannel->data[i - 1];
+  }
+  data[process_rows + 1] = top_row;
+  //
+
+  for (unsigned int i = 0; i < iterations; i++) {
+    // TODO: Process halo_tmp instead of tmp
+    // Tips: Remember to increase the height you apply the kernels to!
+
+    /*
+      Thought: You are expanding a flat structure. Expand the imageChannel->data
+      channel instead with two extra pointers
+    */
 
     // Process 1
     if (world_rank != 0) {
-
-      MPI_Sendrecv(&halo_tmp[image_width], image_width, mpi_pixel, 0, 0,
-                   halo_tmp, image_width, mpi_pixel, 0, 0, MPI_COMM_WORLD,
-                   MPI_STATUSES_IGNORE);
+      MPI_Sendrecv(data[1], image_width, MPI_UNSIGNED_CHAR, world_rank - 1, 0,
+                   data[0], image_width, MPI_UNSIGNED_CHAR, world_rank - 1, 0,
+                   MPI_COMM_WORLD, MPI_STATUSES_IGNORE);
     }
 
     // Process 0
     if (world_rank < world_size - 1) {
-      MPI_Sendrecv(&halo_tmp[process_rows * image_width], image_width,
-                   mpi_pixel, 1, 0, &halo_tmp[(process_rows + 1) * image_width],
-                   image_width, mpi_pixel, 1, 0, MPI_COMM_WORLD,
+      MPI_Sendrecv(data[process_rows], image_width, MPI_UNSIGNED_CHAR,
+                   world_rank + 1, 0, data[process_rows + 1], image_width,
+                   MPI_UNSIGNED_CHAR, world_rank + 1, 0, MPI_COMM_WORLD,
                    MPI_STATUSES_IGNORE);
     }
 
-    //    if (world_rank == 0) {
-    //      for (int i = 0; i < 3; i++) {
-    //        printf("should be %d: \n", halo_tmp[process_rows *
-    //        image_width].g);
-    //      }
-    //    }
-    //
-    //    if (world_rank == 1) {
-    //      for (int i = 0; i < 3; i++) {
-    //        printf("but was %d: \n", testRecv[i].g);
-    //      }
-    //    }
+    imageChannel->data = data;
 
     applyKernel(processImageChannel->data, imageChannel->data,
                 imageChannel->width, imageChannel->height,
@@ -405,8 +391,11 @@ error_exit:
   // Finalize the MPI environment.
   MPI_Finalize();
   // free(testSend);
-  free(halo_tmp);
+  // free(halo_tmp);
   // free(testRecv);
+  free(data);
+  free(bottom_row);
+  free(top_row);
   free(sendcounts);
   free(displacements);
   free(image);
