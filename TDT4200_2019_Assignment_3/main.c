@@ -145,53 +145,52 @@ int main(int argc, char **argv) {
   int *sendcounts = malloc(world_size * sizeof(int));
   int *displacements = malloc(world_size * sizeof(int));
 
-  if (world_rank == 0) {
+  static struct option const long_options[] = {
+      {"help", no_argument, 0, 'h'},
+      {"iterations", required_argument, 0, 'i'},
+      {0, 0, 0, 0}};
 
-    static struct option const long_options[] = {
-        {"help", no_argument, 0, 'h'},
-        {"iterations", required_argument, 0, 'i'},
-        {0, 0, 0, 0}};
-
-    static char const *short_options = "hi:";
-    {
-      char *endptr;
-      int c;
-      int option_index = 0;
-      while ((c = getopt_long(argc, argv, short_options, long_options,
-                              &option_index)) != -1) {
-        switch (c) {
-        case 'h':
-          help(argv[0], 0, NULL);
-          goto graceful_exit;
-        case 'i':
-          iterations = strtol(optarg, &endptr, 10);
-          if (endptr == optarg) {
-            help(argv[0], c, optarg);
-            goto error_exit;
-          }
-          break;
-        default:
-          abort();
+  static char const *short_options = "hi:";
+  {
+    char *endptr;
+    int c;
+    int option_index = 0;
+    while ((c = getopt_long(argc, argv, short_options, long_options,
+                            &option_index)) != -1) {
+      switch (c) {
+      case 'h':
+        help(argv[0], 0, NULL);
+        goto graceful_exit;
+      case 'i':
+        iterations = strtol(optarg, &endptr, 10);
+        if (endptr == optarg) {
+          help(argv[0], c, optarg);
+          goto error_exit;
         }
+        break;
+      default:
+        abort();
       }
     }
+  }
 
-    if (argc <= (optind + 1)) {
-      help(argv[0], ' ', "Not enough arugments");
-      goto error_exit;
-    }
-    input = calloc(strlen(argv[optind]) + 1, sizeof(char));
-    strncpy(input, argv[optind], strlen(argv[optind]));
-    optind++;
+  if (argc <= (optind + 1)) {
+    help(argv[0], ' ', "Not enough arugments");
+    goto error_exit;
+  }
+  input = calloc(strlen(argv[optind]) + 1, sizeof(char));
+  strncpy(input, argv[optind], strlen(argv[optind]));
+  optind++;
 
-    output = calloc(strlen(argv[optind]) + 1, sizeof(char));
-    strncpy(output, argv[optind], strlen(argv[optind]));
-    optind++;
+  output = calloc(strlen(argv[optind]) + 1, sizeof(char));
+  strncpy(output, argv[optind], strlen(argv[optind]));
+  optind++;
 
-    /*
-    End of Parameter parsing!
-   */
+  /*
+  End of Parameter parsing!
+ */
 
+  if (world_rank == 0) {
     /*
     Create the BMP image and load it from disk.
    */
@@ -234,7 +233,7 @@ int main(int argc, char **argv) {
   MPI_Type_contiguous(world_size, MPI_INT, &mpi_process_rows);
   MPI_Type_commit(&mpi_process_rows);
 
-  // TODO: Make struct with process_rows, image_width and image_height to
+  // TODO: Make struct with sendcounts, displacements, image_width and image_height to
   // optimize
   MPI_Bcast(sendcounts, 1, mpi_process_rows, 0, MPI_COMM_WORLD);
   MPI_Bcast(displacements, 1, mpi_process_rows, 0, MPI_COMM_WORLD);
