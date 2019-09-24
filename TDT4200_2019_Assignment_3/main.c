@@ -285,10 +285,11 @@ int main(int argc, char **argv) {
 
   free(newImage.data);
   newImage.data = data;
+  newImage.height += 2;
 
   // Create a single color channel image. It is easier to work just with one
   // color
-  imageChannel = newBmpImageChannel(image_width, process_rows);
+  imageChannel = newBmpImageChannel(image_width, process_rows + 2);
   if (imageChannel == NULL) {
     fprintf(stderr, "Could not allocate new image channel!\n");
     freeBmpImage(image);
@@ -327,20 +328,21 @@ int main(int argc, char **argv) {
     */
 
     // Process 1
-    //    if (world_rank != 0) {
-    //      MPI_Sendrecv(data[1], image_width, MPI_UNSIGNED_CHAR, world_rank -
-    //      1, 0,
-    //                   data[0], image_width, MPI_UNSIGNED_CHAR, world_rank -
-    //                   1, 0, MPI_COMM_WORLD, MPI_STATUSES_IGNORE);
-    //    }
+    if (world_rank != 0) {
+      MPI_Sendrecv(imageChannel->data[1], image_width, MPI_UNSIGNED_CHAR,
+                   world_rank - 1, 0, imageChannel->data[0], image_width,
+                   MPI_UNSIGNED_CHAR, world_rank - 1, 0, MPI_COMM_WORLD,
+                   MPI_STATUSES_IGNORE);
+    }
     //
     //    // Process 0
-    //    if (world_rank < world_size - 1) {
-    //      MPI_Sendrecv(data[process_rows], image_width, MPI_UNSIGNED_CHAR,
-    //                   world_rank + 1, 0, data[process_rows + 1], image_width,
-    //                   MPI_UNSIGNED_CHAR, world_rank + 1, 0, MPI_COMM_WORLD,
-    //                   MPI_STATUSES_IGNORE);
-    //    }
+    if (world_rank < world_size - 1) {
+      MPI_Sendrecv(imageChannel->data[process_rows], image_width,
+                   MPI_UNSIGNED_CHAR, world_rank + 1, 0,
+                   imageChannel->data[process_rows + 1], image_width,
+                   MPI_UNSIGNED_CHAR, world_rank + 1, 0, MPI_COMM_WORLD,
+                   MPI_STATUSES_IGNORE);
+    }
 
     applyKernel(processImageChannel->data, imageChannel->data,
                 imageChannel->width, imageChannel->height,
