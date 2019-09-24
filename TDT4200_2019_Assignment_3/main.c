@@ -212,22 +212,13 @@ int main(int argc, char **argv) {
     image_width = image->width;
     image_height = image->height;
 
-    if (rows_extra == 0) {
-      for (int i = 0; i < world_size; i++) {
-        sendcounts[i] = rows_per_process * image->width;
-        displacements[i] = i * rows_per_process * image->width;
+    for (int i = 0; i < world_size; i++) {
+      int temp_rows = rows_per_process;
+      if (i < rows_extra) {
+        temp_rows++;
       }
-    } else {
-      int tmp_extra = rows_extra;
-      for (int i = 0; i < world_size; i++) {
-        int tmp_rows = rows_per_process;
-        if (tmp_extra > 0) {
-          rows_per_process++;
-          tmp_extra--;
-        }
-        sendcounts[i] = tmp_rows * image->width;
-        displacements[i] = i * tmp_rows * image->width;
-      }
+      sendcounts[i] = temp_rows * image->width;
+      displacements[i] = i * temp_rows * image->width;
     }
   }
 
