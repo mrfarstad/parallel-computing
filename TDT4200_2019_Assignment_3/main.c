@@ -90,6 +90,18 @@ void help(char const *exec, char const opt, char const *optarg) {
   fprintf(out, "Example: %s in.bmp out.bmp -i 10000\n", exec);
 }
 
+/*
+  Converts a bmp image's data from a two dimensional structure to a one
+  dimensional structure. The purpose of this is to perform scattering and
+  gathering more easily.
+  params
+
+  * @param image  pointer to the image struct containing the data
+  * @param height amount of rows in the image
+  * @param width  amount of columns in the image
+  * @return       the image data in one dimensional format
+
+*/
 pixel *flattenImageData(bmpImage *image, int height, int width) {
   pixel *tmp = malloc(height * width * sizeof(pixel));
   for (int i = 0; i < height; i++) {
@@ -100,6 +112,17 @@ pixel *flattenImageData(bmpImage *image, int height, int width) {
   return tmp;
 }
 
+/*
+  Converts one dimensional image data with a given height and width into
+  a two dimensional structure. The image functions in bitmap.c requires
+  image data in a two dimensional structure. This is used to provide the data
+  in the correct format.
+
+  * @param flattenedData  pointer to the one dimensional image data
+  * @param height         amount of rows in the image
+  * @param width          amount of columns in the image
+  * @return               a bmp image struct containing the two dimensional data
+*/
 bmpImage restoreFlattenedImageData(pixel *flattenedData, int height,
                                    int width) {
   pixel **newData = malloc(height * sizeof(pixel *));
@@ -115,6 +138,11 @@ bmpImage restoreFlattenedImageData(pixel *flattenedData, int height,
   return (bmpImage){width, height, newData};
 }
 
+/*
+  This function is used to remove the extra halo rows appended to the image
+  data. This will ensure that the result image will not contain any extra rows
+  than the original image.
+*/
 bmpImage removeHalo(bmpImage newImage, int process_rows, int image_width) {
   pixel **data = calloc(process_rows, sizeof(pixel *));
   for (int i = 0; i < process_rows; i++) {
@@ -204,6 +232,7 @@ int main(int argc, char **argv) {
   End of Parameter parsing!
  */
 
+  // Loading the initial image only has to be done once
   if (world_rank == 0) {
     /*
     Create the BMP image and load it from disk.
@@ -219,61 +248,87 @@ int main(int argc, char **argv) {
       goto error_exit;
     }
 
-    rows_per_process = image->height / world_size;
-    rows_extra = image->height % world_size;
-
+    /*
+      Save the width and height of the image so it can be broadcasted to
+      other processes for later use
+    */
     image_width = image->width;
     image_height = image->height;
-
-    for (int i = 0; i < world_size; i++) {
-      int tmp_rows = rows_per_process;
-      if (i < rows_extra) {
-        tmp_rows += 1;
-      }
-      sendcounts[i] = tmp_rows * image->width;
-      displacements[i] = i * tmp_rows * image->width;
-    }
   }
 
+  // Create an MPI structure to be able to scatter the image with pixel elements
   int blocklengths[1] = {3};
   MPI_Aint displs[1] = {0};
   MPI_Datatype types[1] = {MPI_UNSIGNED_CHAR};
   MPI_Datatype mpi_pixel;
-  MPI_Datatype mpi_process_rows;
-
   MPI_Type_create_struct(1, blocklengths, displs, types, &mpi_pixel);
   MPI_Type_commit(&mpi_pixel);
 
-  MPI_Type_contiguous(world_size, MPI_INT, &mpi_process_rows);
-  MPI_Type_commit(&mpi_process_rows);
-
-  // TODO: Make struct with sendcounts, displacements, image_width and
-  // image_height to optimize
-  MPI_Bcast(sendcounts, 1, mpi_process_rows, 0, MPI_COMM_WORLD);
-  MPI_Bcast(displacements, 1, mpi_process_rows, 0, MPI_COMM_WORLD);
+  /*
+    Broadcast the image size so every process can calculate the proper data
+    amount to process
+  */
   MPI_Bcast(&image_width, 1, MPI_INT, 0, MPI_COMM_WORLD);
   MPI_Bcast(&image_height, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+  // Image data rows per process if rows can be split equally
+  rows_per_process = image_height / world_size;
+  // Extra rows which needs to be handled if rows cannot be split equally
+  rows_extra = image_height % world_size;
+
+  // Distribute rows among processes
+  for (int i = 0; i < world_size; i++) {
+    int tmp_rows = rows_per_process;
+    /*
+     Handles case where rows can not be distributed uniformly and we have to
+     distribute the extra rows to the processes
+    */
+    if (i < rows_extra) {
+      tmp_rows += 1;
+    }
+    sendcounts[i] = tmp_rows * image_width;
+    displacements[i] = i * tmp_rows * image_width;
+  }
 
   bmpImageChannel *imageChannel = NULL;
 
   pixel *tmp = NULL;
   if (world_rank == 0) {
+    /*
+     Convert image data to one dimension to scatter the image between
+     processes properly
+    */
     tmp = flattenImageData(image, image_height, image_width);
   }
 
-  MPI_Barrier(MPI_COMM_WORLD);
+  // The amount of elements each process handles
   int sendcount = sendcounts[world_rank];
+  // The amount of rows each process handles
   int process_rows = sendcount / image_width;
+  // Size of each process' image data buffer
   int sub_buffer_size = sendcount * sizeof(int);
 
+  // Initialise the sub image data buffer for each process
   pixel *subTmp = malloc(sub_buffer_size);
 
+  /*
+    Scatters the image among the processes so each process get a sub image of
+    the original image to process. Scatterv ensures proper distribution of image
+    data even when amount of rows to process is different for each process.
+  */
   MPI_Scatterv(tmp, sendcounts, displacements, mpi_pixel, subTmp, sendcount,
                mpi_pixel, 0, MPI_COMM_WORLD);
 
+  // Restore the two dimensional array to be able to use the provided image
+  // functions properly
   bmpImage newImage =
       restoreFlattenedImageData(subTmp, process_rows, image_width);
 
+  /*
+    Allocate memory for two extra rows containing the halo for each sub image.
+    This will ensure that the stencil can be applied to every pixel in the
+    image, and will not leave white lines in the result image.
+  */
   pixel **data = calloc(process_rows + 2, sizeof(pixel *));
   pixel *bottom_row = calloc(image_width, sizeof(pixel));
   pixel *top_row = calloc(image_width, sizeof(pixel));
@@ -282,7 +337,6 @@ int main(int argc, char **argv) {
     data[i] = newImage.data[i - 1];
   }
   data[process_rows + 1] = top_row;
-
   free(newImage.data);
   newImage.data = data;
   newImage.height += 2;
@@ -316,26 +370,21 @@ int main(int argc, char **argv) {
   bmpImageChannel *processImageChannel =
       newBmpImageChannel(imageChannel->width, imageChannel->height);
 
-  //
-
   for (unsigned int i = 0; i < iterations; i++) {
-    // TODO: Process halo_tmp instead of tmp
-    // Tips: Remember to increase the height you apply the kernels to!
-
     /*
-      Thought: You are expanding a flat structure. Expand the imageChannel->data
-      channel instead with two extra pointers
+      Communication between processes to distribute halo rows to neighboring
+      processes. The first and last row for each process, the halo, will contain
+      the two neighbouring processes' bordering rows. The processes with rank 0
+      and world_rank - 1 will only receive one halo row, while the rest will
+      receive two rows.
     */
-
-    // Process 1
     if (world_rank != 0) {
       MPI_Sendrecv(imageChannel->data[1], image_width, MPI_UNSIGNED_CHAR,
                    world_rank - 1, 0, imageChannel->data[0], image_width,
                    MPI_UNSIGNED_CHAR, world_rank - 1, 0, MPI_COMM_WORLD,
                    MPI_STATUSES_IGNORE);
     }
-    //
-    //    // Process 0
+
     if (world_rank < world_size - 1) {
       MPI_Sendrecv(imageChannel->data[process_rows], image_width,
                    MPI_UNSIGNED_CHAR, world_rank + 1, 0,
@@ -344,11 +393,11 @@ int main(int argc, char **argv) {
                    MPI_STATUSES_IGNORE);
     }
 
+    // Apply the chosen kernel to the whole sub image for `i` iterations
     applyKernel(processImageChannel->data, imageChannel->data,
                 imageChannel->width, imageChannel->height,
                 (int *)laplacian1Kernel, 3, laplacian1KernelFactor
-                //               (int *)laplacian2Kernel, 3,
-                // laplacian2KernelFactor
+                //(int *)laplacian2Kernel, 3, laplacian2KernelFactor
                 //               (int *)laplacian3Kernel, 3,
                 // laplacian3KernelFactor
                 //               (int *)gaussianKernel, 5,
@@ -369,14 +418,32 @@ int main(int argc, char **argv) {
   }
   freeBmpImageChannel(imageChannel);
 
+  /*
+     Remove the two halo rows before gathering each sub image result to the
+     final result
+  */
   bmpImage resImage = removeHalo(newImage, process_rows, image_width);
-  // pixel *res_tmp = flattenImageData(&newImage, process_rows, image_width);
+
+  /*
+    Convert the image data to one dimension to be able to gather the data from
+    each process properly
+  */
   pixel *res_tmp = flattenImageData(&resImage, process_rows, image_width);
 
+  /*
+    Gather the sub image data from each process into the final resulting image.
+    Gatherv is used since each process can have processed a different amount of
+    sub image data.
+  */
   MPI_Gatherv(res_tmp, sendcount, mpi_pixel, tmp, sendcounts, displacements,
               mpi_pixel, 0, MPI_COMM_WORLD);
 
+  // The result image only has to be saved by one process
   if (world_rank == 0) {
+    /*
+     Convert into two dimentional data to be able to use the saveBmpImage
+     function
+    */
     bmpImage resultImage =
         restoreFlattenedImageData(tmp, image_height, image_width);
 
@@ -387,6 +454,7 @@ int main(int argc, char **argv) {
       goto error_exit;
     };
   }
+
 graceful_exit:
   ret = 0;
 error_exit:
@@ -395,17 +463,18 @@ error_exit:
   if (output)
     free(output);
 
+  // Free the MPI type we created earlier
   MPI_Type_free(&mpi_pixel);
-  MPI_Type_free(&mpi_process_rows);
 
   // Finalize the MPI environment.
   MPI_Finalize();
+
+  // Free allocated memory to prevent memory leaks
   free(resImage.data);
   free(sendcounts);
   free(displacements);
   free(image);
   free(tmp);
   free(subTmp);
-
   return ret;
 };
