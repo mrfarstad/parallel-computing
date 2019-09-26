@@ -94,9 +94,9 @@ void help(char const *exec, char const opt, char const *optarg) {
   Converts a bmp image's data from a two dimensional structure to a one
   dimensional structure. The purpose of this is to perform scattering and
   gathering more easily.
-  params
 
-  * @param image  pointer to the image struct containing the data
+  * @param image  pointer to the image struct containing the two dimensional
+  data
   * @param height amount of rows in the image
   * @param width  amount of columns in the image
   * @return       the image data in one dimensional format
@@ -142,6 +142,12 @@ bmpImage restoreFlattenedImageData(pixel *flattenedData, int height,
   This function is used to remove the extra halo rows appended to the image
   data. This will ensure that the result image will not contain any extra rows
   than the original image.
+
+  * @param newImage         the sub image including a halo
+  * @param process_rows     amount of rows in the sub image
+  * @param image_width      amount of columns in the sub image
+  * @return                 a bmp image struct where the two halo rows are
+                            removed
 */
 bmpImage removeHalo(bmpImage newImage, int process_rows, int image_width) {
   pixel **data = calloc(process_rows, sizeof(pixel *));
