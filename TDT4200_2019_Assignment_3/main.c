@@ -1,5 +1,6 @@
 #include "libs/bitmap.h"
 #include <getopt.h>
+#include <math.h>
 #include <mpi.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -96,7 +97,7 @@ void help(char const *exec, char const opt, char const *optarg) {
   gathering more easily.
 
   * @param image  pointer to the image struct containing the two dimensional
-  data
+                  data
   * @param height amount of rows in the image
   * @param width  amount of columns in the image
   * @return       the image data in one dimensional format
@@ -282,29 +283,39 @@ int main(int argc, char **argv) {
   // Extra rows which needs to be handled if rows cannot be split equally
   rows_extra = image_height % world_size;
 
-  // Distribute rows among processes
-  for (int i = 0; i < world_size; i++) {
-    int tmp_rows = rows_per_process;
-    /*
-     Handles case where rows can not be distributed uniformly and we have to
-     distribute the extra rows to the processes
-    */
-    if (i < rows_extra) {
-      tmp_rows += 1;
-    }
-    sendcounts[i] = tmp_rows * image_width;
-    displacements[i] = i * tmp_rows * image_width;
-  }
-
   bmpImageChannel *imageChannel = NULL;
 
-  pixel *tmp = NULL;
+  pixel *tmp = calloc(image_height * image_width, sizeof(pixel));
+
+  int chunk_dimension_size = sqrt(world_size);
+  int chunk_height = image_height / chunk_dimension_size;
+  int chunk_width = image_width / chunk_dimension_size;
+  int chunk_size = chunk_height * chunk_width;
   if (world_rank == 0) {
     /*
      Convert image data to one dimension to scatter the image between
      processes properly
     */
-    tmp = flattenImageData(image, image_height, image_width);
+
+    // Assuming world_size == 4
+    int c = 0;
+    for (int q = 0; q < chunk_dimension_size; q++) {
+      for (int r = 0; r < chunk_dimension_size; r++) {
+        for (int i = 0; i < chunk_height; i++) {
+          for (int j = 0; j < chunk_width; j++) {
+            tmp[c * chunk_size + i * chunk_width + j] =
+                image->data[q * chunk_height + i][r * chunk_width + j];
+          }
+        }
+        c++;
+      }
+    }
+  }
+
+  // Distribute rows among processes
+  for (int i = 0; i < world_size; i++) {
+    sendcounts[i] = chunk_size;
+    displacements[i] = i * chunk_size;
   }
 
   // The amount of elements each process handles
@@ -312,7 +323,7 @@ int main(int argc, char **argv) {
   // The amount of rows each process handles
   int process_rows = sendcount / image_width;
   // Size of each process' image data buffer
-  int sub_buffer_size = sendcount * sizeof(int);
+  int sub_buffer_size = sendcount * sizeof(pixel);
 
   // Initialise the sub image data buffer for each process
   pixel *subTmp = malloc(sub_buffer_size);
@@ -384,20 +395,20 @@ int main(int argc, char **argv) {
       and world_rank - 1 will only receive one halo row, while the rest will
       receive two rows.
     */
-    if (world_rank != 0) {
-      MPI_Sendrecv(imageChannel->data[1], image_width, MPI_UNSIGNED_CHAR,
-                   world_rank - 1, 0, imageChannel->data[0], image_width,
-                   MPI_UNSIGNED_CHAR, world_rank - 1, 0, MPI_COMM_WORLD,
-                   MPI_STATUSES_IGNORE);
-    }
-
-    if (world_rank < world_size - 1) {
-      MPI_Sendrecv(imageChannel->data[process_rows], image_width,
-                   MPI_UNSIGNED_CHAR, world_rank + 1, 0,
-                   imageChannel->data[process_rows + 1], image_width,
-                   MPI_UNSIGNED_CHAR, world_rank + 1, 0, MPI_COMM_WORLD,
-                   MPI_STATUSES_IGNORE);
-    }
+    //    if (world_rank != 0) {
+    //      MPI_Sendrecv(imageChannel->data[1], image_width, MPI_UNSIGNED_CHAR,
+    //                   world_rank - 1, 0, imageChannel->data[0], image_width,
+    //                   MPI_UNSIGNED_CHAR, world_rank - 1, 0, MPI_COMM_WORLD,
+    //                   MPI_STATUSES_IGNORE);
+    //    }
+    //
+    //    if (world_rank < world_size - 1) {
+    //      MPI_Sendrecv(imageChannel->data[process_rows], image_width,
+    //                   MPI_UNSIGNED_CHAR, world_rank + 1, 0,
+    //                   imageChannel->data[process_rows + 1], image_width,
+    //                   MPI_UNSIGNED_CHAR, world_rank + 1, 0, MPI_COMM_WORLD,
+    //                   MPI_STATUSES_IGNORE);
+    //    }
 
     // Apply the chosen kernel to the whole sub image for `i` iterations
     applyKernel(processImageChannel->data, imageChannel->data,
