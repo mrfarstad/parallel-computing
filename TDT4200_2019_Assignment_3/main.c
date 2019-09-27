@@ -311,7 +311,7 @@ int main(int argc, char **argv) {
   int sendcount = sendcounts[world_rank];
   // The amount of rows each process handles
   int process_rows = sendcount / image_width;
-  // Size of each process' image data buffer
+  // Size of each process' sub image data buffer
   int sub_buffer_size = sendcount * sizeof(int);
 
   // Initialise the sub image data buffer for each process
@@ -439,7 +439,7 @@ int main(int argc, char **argv) {
   /*
     Gather the sub image data from each process into the final resulting image.
     Gatherv is used since each process can have processed a different amount of
-    sub image data.
+    rows
   */
   MPI_Gatherv(res_tmp, sendcount, mpi_pixel, tmp, sendcounts, displacements,
               mpi_pixel, 0, MPI_COMM_WORLD);
@@ -459,6 +459,11 @@ int main(int argc, char **argv) {
       freeBmpImage(image);
       goto error_exit;
     };
+    // Free allocated memory to prevent memory leaks
+    for (int i = 0; i < resultImage.height; i++) {
+      free(resultImage.data[i]);
+    }
+    free(resultImage.data);
   }
 
 graceful_exit:
@@ -476,6 +481,10 @@ error_exit:
   MPI_Finalize();
 
   // Free allocated memory to prevent memory leaks
+  free(res_tmp);
+  for (int i = 0; i < resImage.height; i++) {
+    free(resImage.data[i]);
+  }
   free(resImage.data);
   free(sendcounts);
   free(displacements);
