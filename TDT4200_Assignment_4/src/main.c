@@ -31,7 +31,7 @@ static const struct colourGradientStep colourGradient[colourGradientSteps] = {
 static pixel *colourMap = NULL;
 static unsigned int colourMapSize = 0;
 
-static unsigned int res = 2048;
+static unsigned int res = 512;
 static unsigned int maxDwell = 514;
 
 uint64_t diff;
@@ -69,15 +69,20 @@ unsigned long long pixelDwell(double complex const cmin,
 							  unsigned int const y,
 							  unsigned int const x)
 {
-	double complex z = getInitialValue(cmin, cmax, y, x);
+	double real = ((double)x / res) * creal(cmax - cmin) + creal(cmin);
+	double imag = ((double)y / res) * cimag(cmax - cmin) + cimag(cmin);
+	double complex ret = real + imag * I;
+
+	double complex z = ret;
 	unsigned int const dwellInc = 1;
 	unsigned long long dwell = 0;
 
 	// Exit condition: dwell is maxDwell or |z| >= 4
-	while (dwell < maxDwell && isPartOfMandelbrot(z, 2.0))
+
+	while (dwell < maxDwell && sqrt(creal(z) * creal(z) + cimag(z) * cimag(z)) < 4)
 	{
 		// z = z² + initValue
-		z = computeNextValue(z, getInitialValue(cmin, cmax, y, x));
+		z = z * z + ret;
 		dwell += dwellInc;
 	}
 
@@ -86,33 +91,53 @@ unsigned long long pixelDwell(double complex const cmin,
 
 void computeDwellBuffer(unsigned long long **buffer, double complex cmin, double complex cmax)
 {
-	for (unsigned int x = 0; x < res; x++)
+	double real;
+	double imag;
+	double complex ret;
+	double complex z;
+	unsigned int const dwellInc = 1;
+
+	// Loops have been reordered for cache optimization
+	for (unsigned int y = 0; y < res; y++)
 	{
-		for (unsigned int y = 0; y < res; y++)
+		for (unsigned int x = 0; x < res; x++)
 		{
-			/* measure monotonic time */
-			clock_gettime(CLOCK_MONOTONIC, &start); /* mark start time */
-			buffer[y][x] = pixelDwell(cmin, cmax, y, x);
-			clock_gettime(CLOCK_MONOTONIC, &end); /* mark the end time */
-			diff += BILLION * (end.tv_sec - start.tv_sec) + end.tv_nsec - start.tv_nsec;
+			real = ((double)x / res) * creal(cmax - cmin) + creal(cmin);
+			imag = ((double)y / res) * cimag(cmax - cmin) + cimag(cmin);
+			ret = real + imag * I;
+
+			z = ret;
+
+			unsigned long long dwell = 0;
+
+			// Exit condition: dwell is maxDwell or |z| >= 4
+			while (dwell < maxDwell && sqrt(creal(z) * creal(z) + cimag(z) * cimag(z)) < 4)
+			{
+				// z = z² + initValue
+				z = z * z + ret;
+				dwell += dwellInc;
+			}
+
+			buffer[y][x] = dwell;
 		}
 	}
 }
 
 void mapDwellBuffer(bmpImage *image, unsigned long long **buffer)
 {
-	for (unsigned int x = 0; x < res; x++)
+	// Loops have been reordered for cache optimization
+	pixel *colour = malloc(sizeof(pixel));
+	for (unsigned int y = 0; y < res; y++)
 	{
-		for (unsigned int y = 0; y < res; y++)
+		for (unsigned int x = 0; x < res; x += 2)
 		{
-			pixel *colour = malloc(sizeof(pixel));
 			*colour = getDwellColour(y, x, buffer[y][x]);
 			image->data[y][x].r = colour->r;
 			image->data[y][x].g = colour->g;
 			image->data[y][x].b = colour->b;
-			free(colour);
 		}
 	}
+	free(colour);
 }
 
 void help(char const *exec, char const opt, char const *optarg)
@@ -263,8 +288,13 @@ int main(int argc, char *argv[])
 	}
 
 	//Compute the dwell buffer
+	/* measure monotonic time */
+	clock_gettime(CLOCK_MONOTONIC, &start); /* mark start time */
 	computeDwellBuffer(dwellBuffer, cmin, cmax);
-	printf("Total elapsed time in pixelDwell function = %llu microseconds\n", (long long unsigned int)(diff / 1000000));
+
+	clock_gettime(CLOCK_MONOTONIC, &end); /* mark the end time */
+	diff = BILLION * (end.tv_sec - start.tv_sec) + end.tv_nsec - start.tv_nsec;
+	printf("Total elapsed time in computeDwellBuffer function = %llu ms\n", (long long unsigned int)(diff / 1000000));
 
 	//Map the dwell buffer to the bmpImage with fancy colors
 	mapDwellBuffer(image, dwellBuffer);
