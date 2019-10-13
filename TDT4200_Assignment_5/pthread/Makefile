@@ -26,7 +26,7 @@ CC := g++
 CC := gcc
 FLAGS := 
 CCFLAGS := -Wall -Wextra -Wpedantic -O$(OPTIMIZATION) $(FLAGS)
-LINKING := -lpthread -lm -lrt
+LINKING := -lpthread -lm
 
 CCFLAGS.valgrind := $(CCFLAGS) -g
 
