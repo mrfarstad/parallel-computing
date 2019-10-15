@@ -8,7 +8,9 @@ S=1.0
 I=512
 COLOUR=1
 THREADS=4
-ARGUMENTS := -o $(OUTPUT) -r $(RES) -x $(X) -y $(Y) -s $(S) -p $(THREADS) -c $(COLOUR) -i $(I)
+BLOCKDIM=16
+SUBDIVISIONS=4
+ARGUMENTS := -o $(OUTPUT) -r $(RES) -x $(X) -y $(Y) -s $(S) -p $(THREADS) -c $(COLOUR) -i $(I) -b $(BLOCKDIM) -d $(SUBDIVISIONS)
 
 ifeq ($(MARK),1)
 	ARGUMENTS := $(ARGUMENTS) -m

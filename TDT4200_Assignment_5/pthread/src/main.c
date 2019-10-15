@@ -64,6 +64,9 @@ job popJob(jobQueue **head) {
 }
 
 jobQueue *jobQueueHead = NULL;
+// Initialize mutex and conditional variable staticly
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
 
 void createJob(void (*callback)(dwellType *, unsigned int const,
                                 unsigned int const, unsigned int const),
@@ -74,18 +77,85 @@ void createJob(void (*callback)(dwellType *, unsigned int const,
                 .atY = atY,
                 .atX = atX,
                 .blockSize = blockSize};
+  // "Make sure that inserting and picking up jobs is done only by one thread at
+  // a time." This means we need a mutex before calling putJob/popJob
+  pthread_mutex_lock(&mutex);
   putJob(&jobQueueHead, newJob);
+  // "After a new job is created waiting threads must be informed that new jobs
+  // are available." This means we need a conditional variable to signal
+  // fprintf(stderr, "Job created!");
+  pthread_cond_signal(&cond);
+
+  pthread_mutex_unlock(&mutex);
 }
+
+int activeWorkers = 0;
 
 void *worker(void *id) {
   (void)id;
   // This could be your pthread function
+  job workerJob;
+  // A worker should:
+  // Wait for jobs
+  // while (jobQueueHead != NULL) {
+  //   pthread_mutex_lock(&mutex);
+  //   workerJob = popJob(&jobQueueHead);
+  //   pthread_mutex_unlock(&mutex);
+  //   // Execute job
+  //   workerJob.callback(workerJob.dwellBuffer, workerJob.atY, workerJob.atX,
+  //                      workerJob.blockSize);
+  // }
+  pthread_mutex_lock(&mutex);
+  while (1) {
+    while (jobQueueHead != NULL) {
+      // Fetch job
+      workerJob = popJob(&jobQueueHead);
+      activeWorkers++;
+      pthread_mutex_unlock(&mutex);
+      workerJob.callback(workerJob.dwellBuffer, workerJob.atY, workerJob.atX,
+                         workerJob.blockSize);
+      pthread_mutex_lock(&mutex);
+      activeWorkers--;
+    }
+    // We have the lock and there are no active workers, there is no worker
+    // doing something
+    if (activeWorkers == 0) {
+      // No more produced
+      pthread_cond_broadcast(&cond);
+      pthread_mutex_unlock(&mutex);
+      break;
+    } else {
+      // Can be produced more
+      pthread_cond_wait(&cond, &mutex);
+    }
+  }
+
+  // Tell o
+  // Wait for more tasks
+  // Finish if all tasks completed
+
+  // "Make sure that inserting and picking up jobs is done only by one thread at
+  // a time." This means we need a mutex before calling putJob/popJob
+
+  printf("Hello, world! I am thread %d\n", *(unsigned int *)id);
   return NULL;
 }
 
 void initializeWorkers(unsigned int threadsNumber) {
   (void)threadsNumber;
   // This could be you initializer function to do all the pthread related stuff.
+  pthread_t threads[threadsNumber];
+  int threadArgs[threadsNumber];
+  // Don't think this is necessary but leave it here
+  // pthread_mutex_init(&mutex, NULL);
+
+  for (unsigned int i = 0; i < threadsNumber; i++) {
+    threadArgs[i] = i;
+    pthread_create(&threads[i], NULL, worker, &threadArgs[i]);
+  }
+  for (unsigned int i = 0; i < threadsNumber; i++) {
+    pthread_join(threads[i], NULL);
+  }
 }
 
 /*
@@ -114,8 +184,8 @@ void marianiSilver(dwellType *buffer, unsigned int const atY,
     unsigned int newBlockSize = blockSize / subdivisions;
     for (unsigned int ydiv = 0; ydiv < subdivisions; ydiv++) {
       for (unsigned int xdiv = 0; xdiv < subdivisions; xdiv++) {
-        marianiSilver(buffer, atY + (ydiv * newBlockSize),
-                      atX + (xdiv * newBlockSize), newBlockSize);
+        createJob(marianiSilver, buffer, atY + (ydiv * newBlockSize),
+                  atX + (xdiv * newBlockSize), newBlockSize);
       }
     }
   }
@@ -299,7 +369,7 @@ int main(int argc, char *argv[]) {
     unsigned int const correctedBlockSize =
         pow(subdivisions, numDiv) * blockDim;
     // Mariani-Silver subdivision algorithm
-    marianiSilver(dwellBuffer, 0, 0, correctedBlockSize);
+    createJob(marianiSilver, dwellBuffer, 0, 0, correctedBlockSize);
   } else {
     // Traditional Mandelbrot-Set computation or the 'Escape Time' algorithm
     // computeBlock respects the resolution of the image, so we scale the blocks
@@ -308,10 +378,12 @@ int main(int argc, char *argv[]) {
 
     for (unsigned int t = 0; t < useThreads; t++) {
       for (unsigned int x = 0; x < useThreads; x++) {
-        escapeTime(dwellBuffer, t * block, x * block, block);
+        createJob(escapeTime, dwellBuffer, t * block, x * block, block);
       }
     }
   }
+
+  initializeWorkers(useThreads);
 
   // Map dwell buffer to image
   for (unsigned int y = 0; y < resolution; y++) {
