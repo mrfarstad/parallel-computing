@@ -1,6 +1,7 @@
 
-
 CC=gcc
+#CC=/usr/local/opt/llvm/bin/clang
+
 FLAGS := -O3
 LINKING := -lblas -fopenmp
 

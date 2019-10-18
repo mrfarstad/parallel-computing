@@ -89,43 +89,46 @@ void createJob(void (*callback)(dwellType *, unsigned int const,
   pthread_mutex_unlock(&mutex);
 }
 
+// This variable is used for the exit condition of the infinite loop
 int activeWorkers = 0;
 
 void *worker(void *id) {
   (void)id;
   // This could be your pthread function
   job workerJob;
-  // A worker should:
-  // Wait for jobs
-  // while (jobQueueHead != NULL) {
-  //   pthread_mutex_lock(&mutex);
-  //   workerJob = popJob(&jobQueueHead);
-  //   pthread_mutex_unlock(&mutex);
-  //   // Execute job
-  //   workerJob.callback(workerJob.dwellBuffer, workerJob.atY, workerJob.atX,
-  //                      workerJob.blockSize);
-  // }
+
+  // Lock the mutex to check jobQueueHead and use popJob
   pthread_mutex_lock(&mutex);
   while (1) {
     while (jobQueueHead != NULL) {
       // Fetch job
       workerJob = popJob(&jobQueueHead);
       activeWorkers++;
+      // Performing work does not require the mutex so unlock it
       pthread_mutex_unlock(&mutex);
+      // Perform job
       workerJob.callback(workerJob.dwellBuffer, workerJob.atY, workerJob.atX,
                          workerJob.blockSize);
+      // Lock the mutex again to recheck jobQueueHead and use popJob again
       pthread_mutex_lock(&mutex);
       activeWorkers--;
     }
+    /*
+      Now the job queue is empty, but we don't know if there are more jobs being
+      produced. Therefore, we have to check if there are any more active workers
+      (since workers can spawn more jobs)
+    */
+
     // We have the lock and there are no active workers, there is no worker
     // doing something
     if (activeWorkers == 0) {
-      // No more produced
+      // Nothing more is being produced, therefore release idle workers from
+      // waiting for work
       pthread_cond_broadcast(&cond);
       pthread_mutex_unlock(&mutex);
       break;
     } else {
-      // Can be produced more
+      // Workers are still active, so more can be produced
       pthread_cond_wait(&cond, &mutex);
     }
   }
@@ -137,7 +140,7 @@ void *worker(void *id) {
   // "Make sure that inserting and picking up jobs is done only by one thread at
   // a time." This means we need a mutex before calling putJob/popJob
 
-  printf("Hello, world! I am thread %d\n", *(unsigned int *)id);
+  // printf("Hello, world! I am thread %d\n", *(unsigned int *)id);
   return NULL;
 }
 
@@ -145,13 +148,13 @@ void initializeWorkers(unsigned int threadsNumber) {
   (void)threadsNumber;
   // This could be you initializer function to do all the pthread related stuff.
   pthread_t threads[threadsNumber];
-  int threadArgs[threadsNumber];
+  // int threadArgs[threadsNumber];
   // Don't think this is necessary but leave it here
   // pthread_mutex_init(&mutex, NULL);
 
   for (unsigned int i = 0; i < threadsNumber; i++) {
-    threadArgs[i] = i;
-    pthread_create(&threads[i], NULL, worker, &threadArgs[i]);
+    // threadArgs[i] = i;
+    pthread_create(&threads[i], NULL, worker, NULL); //&threadArgs[i]);
   }
   for (unsigned int i = 0; i < threadsNumber; i++) {
     pthread_join(threads[i], NULL);
