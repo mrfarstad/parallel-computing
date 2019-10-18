@@ -58,8 +58,8 @@ int main(const unsigned int argc, char **argv) {
   // results
   bool test = !(argc <= optind);
 
-  int m = 20000;
-  int n = 10000;
+  int m = 2000;
+  int n = 1000;
   int k = 200;
 
   double *A = (double *)malloc(m * k * sizeof(double));
