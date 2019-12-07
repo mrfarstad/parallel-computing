@@ -197,31 +197,28 @@ int main(int argc, char **argv) {
   }
 
   int *send_counts = malloc(world_size * sizeof(int));
-  int *send_displs = malloc(world_size * sizeof(int) + 1);
-  int *recv_counts = malloc(world_size * sizeof(int));
-  int *recv_displs = malloc(world_size * sizeof(int));
+  int *send_displs = malloc(world_size * sizeof(int));
 
   size_t displ = 0;
-  size_t local_height = image->height / world_size;
   for (int i = 0; i < world_size; i++) {
-    size_t size = image->width * image->height / world_size;
-    // if (i < image->height % world_size) {
-    //  size += image->width;
-    //  local_height++;
-    //}
-    displ += size;
+    size_t size = image->width * (image->height / world_size);
+    // Handle odd pictures, seems to work without but idk
+    if (i < image->height % world_size) {
+      size += image->width;
+    }
     send_counts[i] = size;
-    recv_counts[i] = size;
-    send_displs[i] = displ;
-    recv_displs[i] = displ;
+    send_displs[i] = displ; // i * size; // displ;
+    displ += size;
   }
+
+  size_t local_height = send_counts[world_rank] / image->width;
 
   // Here we do the actual computation!
   // imageChannel->data is a 2-dimensional array of unsigned char which is
   // accessed row first ([y][x])
   //
   bmpImageChannel *processImageChannel =
-      newBmpImageChannel(image->width, local_height);
+      newBmpImageChannel(image->width, local_height + 2);
 
   // Original image -> imageChannel
   // Total working image -> processImageChannel
@@ -229,28 +226,57 @@ int main(int argc, char **argv) {
   //
   //
   bmpImageChannel *localImageChannel =
-      newBmpImageChannel(image->width, image->height / world_size);
+      newBmpImageChannel(image->width, local_height + 2);
 
   MPI_Scatterv(imageChannel->rawdata, send_counts, send_displs,
-               MPI_UNSIGNED_CHAR, localImageChannel->rawdata,
+               MPI_UNSIGNED_CHAR, &localImageChannel->rawdata[image->width],
                send_counts[world_rank], MPI_UNSIGNED_CHAR, 0, MPI_COMM_WORLD);
 
-  MPI_Gatherv(localImageChannel->rawdata, recv_counts[world_rank],
-              MPI_UNSIGNED_CHAR, imageChannel->rawdata, recv_counts,
-              recv_displs, MPI_UNSIGNED_CHAR, 0, MPI_COMM_WORLD);
+  for (unsigned int i = 0; i < iterations; i++) {
 
-  //  for (unsigned int i = 0; i < iterations; i++) {
-  //    applyKernel(
-  //        processImageChannel->rawdata, localImageChannel->rawdata,
-  //        image->width, local_height, (int *)laplacian1Kernel, 3,
-  //        laplacian1KernelFactor
-  //        //               (int *)laplacian2Kernel, 3, laplacian2KernelFactor
-  //        //               (int *)laplacian3Kernel, 3, laplacian3KernelFactor
-  //        //               (int *)gaussianKernel, 5, gaussianKernelFactor
-  //    );
-  //    swapImageChannel(&processImageChannel, &localImageChannel);
-  //  }
-  //  freeBmpImageChannel(processImageChannel);
+    // TODO: Send halo rows between processes
+    // Need to sendrecv between neighbouring processes
+    if (world_rank != world_size - 1) {
+      //  MPI_Sendrecv(&localImageChannel->rawdata[local_height], image->width,
+      //               MPI_UNSIGNED_CHAR, world_rank + 1, 0,
+      //               &localImageChannel->rawdata[local_height + 1],
+      //               image->width, MPI_UNSIGNED_CHAR, world_rank + 1, 1,
+      //               MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+      MPI_Send(&localImageChannel->rawdata[image->width * local_height],
+               image->width, MPI_UNSIGNED_CHAR, world_rank + 1, 0,
+               MPI_COMM_WORLD);
+      MPI_Recv(&localImageChannel->rawdata[image->width * (local_height + 1)],
+               image->width, MPI_UNSIGNED_CHAR, world_rank + 1, 1,
+               MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    }
+
+    if (world_rank != 0) {
+      MPI_Recv(&localImageChannel->rawdata[0], image->width, MPI_UNSIGNED_CHAR,
+               world_rank - 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      MPI_Send(&localImageChannel->rawdata[image->width], image->width,
+               MPI_UNSIGNED_CHAR, world_rank - 1, 1, MPI_COMM_WORLD);
+      //  MPI_Sendrecv(&localImageChannel->rawdata[image->width], image->width,
+      //               MPI_UNSIGNED_CHAR, world_rank - 1, 1,
+      //               &localImageChannel->rawdata[0], image->width,
+      //               MPI_UNSIGNED_CHAR, world_rank - 1, 0, MPI_COMM_WORLD,
+      //               MPI_STATUS_IGNORE);
+    }
+
+    applyKernel(
+        processImageChannel->rawdata, localImageChannel->rawdata, image->width,
+        local_height + 2, (int *)laplacian1Kernel, 3, laplacian1KernelFactor
+        //               (int *)laplacian2Kernel, 3, laplacian2KernelFactor
+        //               (int *)laplacian3Kernel, 3, laplacian3KernelFactor
+        //               (int *)gaussianKernel, 5, gaussianKernelFactor
+    );
+    swapImageChannel(&processImageChannel, &localImageChannel);
+  }
+  freeBmpImageChannel(processImageChannel);
+
+  MPI_Gatherv(&localImageChannel->rawdata[image->width],
+              send_counts[world_rank], MPI_UNSIGNED_CHAR, imageChannel->rawdata,
+              send_counts, send_displs, MPI_UNSIGNED_CHAR, 0, MPI_COMM_WORLD);
 
   // Map our single color image back to a normal BMP image with 3 color channels
   // mapEqual puts the color value on all three channels the same way
@@ -285,8 +311,6 @@ error_exit:
 
   free(send_counts);
   free(send_displs);
-  free(recv_counts);
-  free(recv_displs);
 
   MPI_Finalize();
   return ret;
