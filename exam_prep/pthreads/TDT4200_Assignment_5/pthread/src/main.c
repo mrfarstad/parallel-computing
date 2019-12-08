@@ -67,8 +67,15 @@ jobQueue *jobQueueHead = NULL;
 
 pthread_mutex_t mutex;
 pthread_cond_t cond;
+/*
+   Used to know if workers should exit
+   Workers create more jobs, and if there are no more jobs and no one creating
+   more jobs (active_workers == 0), then threads should quit. This is based on
+   the assumption that when the workers are started, at least one job is present
+   in the queue. This is why we start the workers after the first job is
+   created.
+*/
 unsigned int active_workers = 0;
-unsigned int jobs_available = 0;
 
 void createJob(void (*callback)(dwellType *, unsigned int const,
                                 unsigned int const, unsigned int const),
@@ -81,38 +88,40 @@ void createJob(void (*callback)(dwellType *, unsigned int const,
                 .blockSize = blockSize};
   pthread_mutex_lock(&mutex);
   putJob(&jobQueueHead, newJob);
-  printf("jobs_available: %d\n", jobs_available);
   pthread_mutex_unlock(&mutex);
 }
 
+// This could be your pthread function
 void *worker(void *id) {
   (void)id;
-  // This could be your pthread function
-  job *task = malloc(sizeof(job));
+  // This workers current job
+  job *task;
+
   // Keep threads alive
   while (true) {
+
     // Lock mutex
     pthread_mutex_lock(&mutex);
-
-    // Fetch job
     if (jobQueueHead != NULL) {
       // Workers with jobs are active
       active_workers++;
+      // Fetch job
+      task = malloc(sizeof(job));
       *task = popJob(&jobQueueHead);
     } else {
+      // If no jobs, then thread has nothing to do
       task = NULL;
 
-      // If I just checked that there was no more jobs, and no-one are active
-      // making more jobs, then I quit
+      // No more jobs, and no active workers => quit thread
       if (active_workers == 0) {
+        pthread_mutex_unlock(&mutex);
         break;
       }
-      //      // Unlock mutex and wait for condition
+      // Unlock mutex and wait for condition
       while (pthread_cond_wait(&cond, &mutex) != 0)
         ;
-      //      // Mutex relocked after return
+      // Mutex relocked after return
     }
-    // printf("active_workers %d\n", active_workers);
 
     // Unlock mutex
     pthread_mutex_unlock(&mutex);
@@ -129,6 +138,8 @@ void *worker(void *id) {
       pthread_mutex_unlock(&mutex);
     }
   }
+
+  free(task);
 
   return NULL;
 }
