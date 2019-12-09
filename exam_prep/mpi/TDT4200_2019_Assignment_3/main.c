@@ -202,7 +202,7 @@ int main(int argc, char **argv) {
   size_t displ = 0;
   for (int i = 0; i < world_size; i++) {
     size_t size = image->width * (image->height / world_size);
-    // Handle odd pictures, seems to work without but idk
+    // Handle pictures with odd amount of rows
     if (i < image->height % world_size) {
       size += image->width;
     }
@@ -234,15 +234,7 @@ int main(int argc, char **argv) {
 
   for (unsigned int i = 0; i < iterations; i++) {
 
-    // TODO: Send halo rows between processes
-    // Need to sendrecv between neighbouring processes
     if (world_rank != world_size - 1) {
-      //  MPI_Sendrecv(&localImageChannel->rawdata[local_height], image->width,
-      //               MPI_UNSIGNED_CHAR, world_rank + 1, 0,
-      //               &localImageChannel->rawdata[local_height + 1],
-      //               image->width, MPI_UNSIGNED_CHAR, world_rank + 1, 1,
-      //               MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-
       MPI_Send(&localImageChannel->rawdata[image->width * local_height],
                image->width, MPI_UNSIGNED_CHAR, world_rank + 1, 0,
                MPI_COMM_WORLD);
@@ -256,11 +248,6 @@ int main(int argc, char **argv) {
                world_rank - 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
       MPI_Send(&localImageChannel->rawdata[image->width], image->width,
                MPI_UNSIGNED_CHAR, world_rank - 1, 1, MPI_COMM_WORLD);
-      //  MPI_Sendrecv(&localImageChannel->rawdata[image->width], image->width,
-      //               MPI_UNSIGNED_CHAR, world_rank - 1, 1,
-      //               &localImageChannel->rawdata[0], image->width,
-      //               MPI_UNSIGNED_CHAR, world_rank - 1, 0, MPI_COMM_WORLD,
-      //               MPI_STATUS_IGNORE);
     }
 
     applyKernel(
@@ -287,11 +274,8 @@ int main(int argc, char **argv) {
       fprintf(stderr, "Could not map image channel!\n");
       freeBmpImage(image);
       freeBmpImageChannel(imageChannel);
-      // printf("hello\n");
       goto error_exit;
     }
-    // printf("hello\n");
-    freeBmpImageChannel(imageChannel);
 
     // Write the image back to disk
     if (saveBmpImage(image, output) != 0) {
@@ -300,6 +284,8 @@ int main(int argc, char **argv) {
       goto error_exit;
     };
   }
+  freeBmpImageChannel(imageChannel);
+  freeBmpImageChannel(localImageChannel);
 
 graceful_exit:
   ret = 0;
