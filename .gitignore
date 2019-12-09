@@ -1,2 +1,4 @@
 *.bmp
 ntnu-ssh/
+*.o
+*.sh
