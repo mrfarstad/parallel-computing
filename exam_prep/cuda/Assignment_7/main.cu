@@ -1,3 +1,4 @@
+#include <cooperative_groups.h>
 #include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -6,6 +7,7 @@
 extern "C" {
 #include "libs/bitmap.h"
 }
+using namespace cooperative_groups;
 
 #define BLOCKX 32
 #define BLOCKY 32
@@ -90,23 +92,92 @@ __global__ void deviceApplyFilter(unsigned char *out, unsigned char *in,
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-  int aggregate = 0;
-  for (unsigned int ky = 0; ky < filterDim; ky++) {
-    int nky = filterDim - 1 - ky;
-    for (unsigned int kx = 0; kx < filterDim; kx++) {
-      int nkx = filterDim - 1 - kx;
+  __shared__ unsigned char shared_memory[BLOCKY][BLOCKX];
 
-      int yy = y + (ky - filterCenter);
-      int xx = x + (kx - filterCenter);
-      if (xx >= 0 && xx < (int)width && yy >= 0 && yy < (int)height)
-        aggregate += in[yy * width + xx] * filter[nky * filterDim + nkx];
+  shared_memory[threadIdx.y][threadIdx.x] = in[y * width + x];
+
+  __syncthreads();
+
+  if (x < width && y < height) {
+
+    int aggregate = 0;
+    for (unsigned int ky = 0; ky < filterDim; ky++) {
+      int nky = filterDim - 1 - ky;
+      for (unsigned int kx = 0; kx < filterDim; kx++) {
+        int nkx = filterDim - 1 - kx;
+
+        int yy = threadIdx.y + (ky - filterCenter);
+        int xx = threadIdx.x + (kx - filterCenter);
+        if (xx >= 0 && xx < (int)blockDim.x && yy >= 0 && yy < (int)blockDim.y)
+          aggregate += shared_memory[yy][xx] * filter[nky * filterDim + nkx];
+        else {
+          yy = y + (ky - filterCenter);
+          xx = x + (kx - filterCenter);
+
+          if (xx >= 0 && xx < (int)width && yy >= 0 && yy < (int)height)
+            aggregate += in[yy * width + xx] * filter[nky * filterDim + nkx];
+        }
+      }
+    }
+    aggregate *= filterFactor;
+    if (aggregate > 0) {
+      out[y * width + x] = (aggregate > 255) ? 255 : aggregate;
+    } else {
+      out[y * width + x] = 0;
     }
   }
-  aggregate *= filterFactor;
-  if (aggregate > 0) {
-    out[y * width + x] = (aggregate > 255) ? 255 : aggregate;
-  } else {
-    out[y * width + x] = 0;
+}
+
+__global__ void deviceGlobalSyncApplyFilter(unsigned char *out, unsigned char *in,
+                                  unsigned int width, unsigned int height,
+                                  int *filter, unsigned int filterDim,
+                                  float filterFactor, int iterations) {
+  grid_group grid = this_grid();
+
+  unsigned int const filterCenter = (filterDim / 2);
+
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+  __shared__ unsigned char shared_memory[BLOCKY][BLOCKX];
+
+  shared_memory[threadIdx.y][threadIdx.x] = in[y * width + x];
+
+  __syncthreads();
+
+  for (unsigned int i = 0; i < iterations; i++) {
+    if (x < width && y < height) {
+
+      int aggregate = 0;
+      for (unsigned int ky = 0; ky < filterDim; ky++) {
+        int nky = filterDim - 1 - ky;
+        for (unsigned int kx = 0; kx < filterDim; kx++) {
+          int nkx = filterDim - 1 - kx;
+
+          int yy = threadIdx.y + (ky - filterCenter);
+          int xx = threadIdx.x + (kx - filterCenter);
+          if (xx >= 0 && xx < (int)blockDim.x && yy >= 0 && yy < (int)blockDim.y)
+            aggregate += shared_memory[yy][xx] * filter[nky * filterDim + nkx];
+          else {
+            yy = y + (ky - filterCenter);
+            xx = x + (kx - filterCenter);
+
+            if (xx >= 0 && xx < (int)width && yy >= 0 && yy < (int)height)
+              aggregate += in[yy * width + xx] * filter[nky * filterDim + nkx];
+          }
+        }
+      }
+      aggregate *= filterFactor;
+      if (aggregate > 0) {
+        out[y * width + x] = (aggregate > 255) ? 255 : aggregate;
+      } else {
+        out[y * width + x] = 0;
+      }
+    }
+    unsigned char *tmp = out;
+    out = in;
+    in = tmp;
+    grid.sync();
   }
 }
 
@@ -244,30 +315,45 @@ int main(int argc, char **argv) {
   // bmpImageChannel *processImageChannel =
   //    newBmpImageChannel(imageChannel->width, imageChannel->height);
 
-  dim3 blockDim(BLOCKX, BLOCKY);
-  dim3 gridDim(imageChannel->width / BLOCKX, imageChannel->height / BLOCKY);
+  //dim3 blockDim(BLOCKX, BLOCKY);
+  //dim3 gridDim(imageChannel->width / BLOCKX, imageChannel->height / BLOCKY);
 
-  for (unsigned int i = 0; i < iterations; i++) {
-    deviceApplyFilter<<<gridDim, blockDim>>>(
-        working_data, final_data, imageChannel->width, imageChannel->height,
-        (int *)dev_filter, filter_dim, laplacian1FilterFactor);
+  
 
-    // cudaErrorCheck(cudaPeekAtLastError());
-    // cudaErrorCheck(cudaDeviceSynchronize());
+  int dev;
+  cudaGetDevice(&dev);
+  struct cudaDeviceProp props;
+  cudaGetDeviceProperties(&props, dev);
 
-    // Swap the data pointers
-    // unsigned char **tmp = processImageChannel->data;
-    // processImageChannel->data = imageChannel->data;
-    // imageChannel->data = tmp;
-    // unsigned char *tmp_raw = processImageChannel->rawdata;
-    // processImageChannel->rawdata = imageChannel->rawdata;
-    // imageChannel->rawdata = tmp_raw;
+  int numBlocksPerSm;
+  cudaOccupancyMaxActiveBlocksPerMultiprocessor(&numBlocksPerSm, deviceGlobalSyncApplyFilter, BLOCKX * BLOCKY, 0);
+
+  void* args[] = { 
+    &working_data,
+    &final_data,
+    &imageChannel->width,
+    &imageChannel->height,
+    &dev_filter,
+    &filter_dim,
+    (void *)&laplacian1FilterFactor,
+    &iterations
+  };
+
+    //for (unsigned int i = 0; i < iterations; i++) {
+    //  deviceApplyFilter<<<gridDim, blockDim>>>(
+    //    working_data, final_data, imageChannel->width, imageChannel->height,
+    //    (int *)dev_filter, filter_dim, laplacian1FilterFactor);
+
+    cudaLaunchCooperativeKernel(
+        (void*)deviceGlobalSyncApplyFilter, props.multiProcessorCount*numBlocksPerSm, BLOCKX * BLOCKY, args);
+
+    //cudaErrorCheck(cudaPeekAtLastError());
+    //cudaErrorCheck(cudaDeviceSynchronize());
 
     unsigned char *tmp = working_data;
     working_data = final_data;
     final_data = tmp;
-  }
-  // freeBmpImageChannel(processImageChannel);
+  // }
 
   cudaErrorCheck(cudaMemcpy(imageChannel->rawdata, final_data,
                             image->width * image->height,
