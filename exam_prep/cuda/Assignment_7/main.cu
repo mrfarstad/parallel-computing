@@ -317,7 +317,6 @@ int main(int argc, char **argv) {
 
   //dim3 blockDim(BLOCKX, BLOCKY);
   //dim3 gridDim(imageChannel->width / BLOCKX, imageChannel->height / BLOCKY);
-
   
 
   int dev;
@@ -339,21 +338,12 @@ int main(int argc, char **argv) {
     &iterations
   };
 
-    //for (unsigned int i = 0; i < iterations; i++) {
-    //  deviceApplyFilter<<<gridDim, blockDim>>>(
-    //    working_data, final_data, imageChannel->width, imageChannel->height,
-    //    (int *)dev_filter, filter_dim, laplacian1FilterFactor);
+  cudaLaunchCooperativeKernel(
+      (void*)deviceGlobalSyncApplyFilter, props.multiProcessorCount*numBlocksPerSm, BLOCKX * BLOCKY, args);
 
-    cudaLaunchCooperativeKernel(
-        (void*)deviceGlobalSyncApplyFilter, props.multiProcessorCount*numBlocksPerSm, BLOCKX * BLOCKY, args);
-
-    //cudaErrorCheck(cudaPeekAtLastError());
-    //cudaErrorCheck(cudaDeviceSynchronize());
-
-    unsigned char *tmp = working_data;
-    working_data = final_data;
-    final_data = tmp;
-  // }
+  unsigned char *tmp = working_data;
+  working_data = final_data;
+  final_data = tmp;
 
   cudaErrorCheck(cudaMemcpy(imageChannel->rawdata, final_data,
                             image->width * image->height,

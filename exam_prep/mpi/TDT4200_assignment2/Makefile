@@ -4,6 +4,9 @@ DEPS 	= bitmap.h
 main : main.o bitmap.o
 	mpicc main.o bitmap.o -o main 
 
+test : test.o
+	mpicc test.o -o test
+
 # % matches anything, $< refers to the left hand side contents and $@ refers to the LHS
 #Common header as dependency to force recompilation if it is modified
 %.o : %.c $(DEPS)
@@ -11,4 +14,4 @@ main : main.o bitmap.o
 
 phony : clean
 clean: 
-	rm -f *.o
+	rm -f *.o main test
